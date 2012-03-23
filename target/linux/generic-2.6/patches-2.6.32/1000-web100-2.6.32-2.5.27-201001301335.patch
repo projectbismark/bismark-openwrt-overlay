@@ -1,0 +1,3752 @@
+diff --git a/Documentation/web100/locking.txt b/Documentation/web100/locking.txt
+new file mode 100644
+index 0000000..b8ed239
+--- /dev/null
++++ b/Documentation/web100/locking.txt
+@@ -0,0 +1,33 @@
++Web100 Locking Model for Linux 2.4
++John Heffner <jheffner@psc.edu>
++August 2, 2001
++
++
++1. Lookup Structures
++
++The connections entries are kept linked together simultaneously in a table
++and in a list.  Only entries in these structures can be looked up.  To
++protect these lookup structures, we have a single global reader-writer
++spinlock, web100_linkage_lock.  Since we grab the lock both from user space
++and in the bottom half, we must do a [read/write]_lock_bh.  As this disables
++the local BH's, this lock should *not* be held for very long.
++
++
++2. Data Integrity
++
++The statistics are protected by the sock's lock.  Any code modifying or
++reading the statistics should hold the sock lock while doing so.  We assume
++that if the socket is gone, the statistics should not be modified, so
++readers need not hold any lock.
++
++
++3. Statistics Destruction
++
++A statistics structure keeps a count of the number of references to it,
++wc_users.  When a lookup is performed, the reference count should be
++incremented (while the linkage lock is held) by calling web100_stats_use. 
++When the reference is no longer needed, decrement the count by calling
++web100_stats_unuse.  The latter function will free the statistics when there
++are no remaining references.  The lookup structures keep one reference.  The
++sock also keeps one, since the sock may be destroyed before it ever enters
++the ESTABLISHED state.
+diff --git a/Documentation/web100/proc_interface.txt b/Documentation/web100/proc_interface.txt
+new file mode 100644
+index 0000000..772a763
+--- /dev/null
++++ b/Documentation/web100/proc_interface.txt
+@@ -0,0 +1,102 @@
++WEB100 proc interface notes
++===========================
++
++The web100 modifications to the kernel collect information about the
++state of a TCP transfer in a kernel data structure that is linked
++out of the "sock" TCP structure in sock.h.  Please see
++"include/net/web100_stats.h" for the structure definition.
++
++The API for this structure is provided through the /proc interface.
++This document provides a brief description of this interface.  Please
++see fs/proc/web100.c for source code.
++
++First, kernel creates the /proc/web100 directory and the file
++/proc/web100/header at system boot time.
++
++Each new TCP connection is assigned a unique, unchanging number
++(similar to a pid), and its directory name is that number as ASCII
++decimal.  These directories persist for about sixty seconds after the
++connection is terminated (goes into a CLOSED or TIME_WAIT state).  The
++connection stats will not change after the connection is terminated.
++(So a connection whose state variable is TIME_WAIT is not necessarily
++still in TIME_WAIT.)  It should be noted that what is meant by a
++"connection" here is actually one side of a connection.  If a
++connection is created from the local host to the local host, two
++connection ID's will be created.
++
++When writing an application to read from the proc interface, it should be
++taken into consideration that the directories and their files can disappear at
++any time (they do so at an interrupt level).  So if a file open fails on a
++file you just looked up (say, with glob), that's probably normal and the
++program should handle it gracefully.
++
++Another seemingly strange thing that can happen is that stats for multiple
++connections with the same four-tuple can show up.  No more than one of the
++connections may be in any state but CLOSED or TIME_WAIT.  This behavior is
++correct, and should be handled as such.
++
++The algorithms governing the connection numbers are not yet final. 
++Currently, for simplification, it is only possible to have 32768
++connections.
++
++Inside each connection directory is an identical set of files.  One is
++spec-ascii, which contains the connection four-tuple in human-readable
++format.  One can, for example, see all outgoing ssh connections by executing
++"grep ':22$' /proc/web100/*/spec-ascii" from the command prompt.
++
++The remaining files provide access to states of TCP-KIS variables in
++local host byte-order.  Since the number, names, and contents of these
++files can and will change with releases, they are described in a
++header file -- /proc/web100/header.  A file named spec, which contains the
++variables describing the connection's four-tuple, should be present
++for any release.
++
++The header file is in human-readable format as follows:
++	<version>
++	
++	/<filename>
++	<varname> <offset> <type>
++	<varname> <offset> <type>
++	...
++	
++	/<filename>
++	...
++The filename is the name of the file inside each connection directory.  (The
++/ is prepended to make it clear it is a new file, not a new variable in the
++previous file.  There is also an empty line before each filename.)  Each
++file has an arbitrary number of variables, and there are an arbitrary number
++of files.  The type is an integer, and is currently defined something like:
++
++	enum {
++		WEB100_TYPE_INTEGER,
++		WEB100_TYPE_INTEGER32,
++		WEB100_TYPE_IP_ADDRESS,
++		WEB100_TYPE_COUNTER32,
++		WEB100_TYPE_GAUGE32,
++		WEB100_TYPE_UNSIGNED32,
++		WEB100_TYPE_TIME_TICKS,
++		WEB100_TYPE_COUNTER64,
++		WEB100_TYPE_UNSIGNED16
++	};
++
++in the kernel source file fs/proc/web100.c.  These correspond to
++MIB-II types.  (RFC2578)
++
++To read variables, seek to the appropriate offset, then read the appropriate
++amount of data.  (Length is implied by the type.)  Multiple variables may be
++read with a single read, and will be read atomically when doing so. 
++Currently, all variables are readable, but this may not be true in the
++future.
++
++To write variables, seek to the appropriate offset, and write the
++appropriate amount of data.  Only a single variable may be written at one
++time.  If variables must be atomically written, a variable should be used as
++a flag to signal that the write is done, and the kernel code depending on
++the variables should be written to handle this.
++
++See: http://www.web100.org
++Please send coments to prog@web100.org
++
++John Heffner, Matt Mathis, R. Reddy
++August 2000, Jan 2001
++
+diff --git a/Documentation/web100/sysctl.txt b/Documentation/web100/sysctl.txt
+new file mode 100644
+index 0000000..8dd8e55
+--- /dev/null
++++ b/Documentation/web100/sysctl.txt
+@@ -0,0 +1,24 @@
++Web100 sysctl variables
++John Heffner <jheffner@psc.edu>
++October 10, 2002
++
++net.ipv4.WAD_FloydAIMD
++	This value is used for WAD_FloydAIMD by a connection when its KIS
++	variable is 0.  This variable requires that private extenisons be
++	enabled.
++
++net.ipv4.WAD_IFQ
++	This value is used for WAD_IFQ by a connection when its KIS
++	variable is 0.  This variable requires that Net100 extensions be
++	enabled.
++
++net.ipv4.WAD_MaxBurst
++	This value is used for WAD_MaxBurst by a connection when its KIS
++	variable is 0.  This variable requires that Net100 extensions be
++	enabled.
++
++net.ipv4.web100_fperms
++	Sets the file permissions of the files in /proc/web100/*/
++
++net.ipv4.web100_gid
++	Sets the group of the files in /proc/web100/*/
+diff --git a/Makefile b/Makefile
+index f5cdb72..f7ee08d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,7 +1,7 @@
+ VERSION = 2
+ PATCHLEVEL = 6
+ SUBLEVEL = 32
+-EXTRAVERSION = .27
++EXTRAVERSION = .27
+ NAME = Man-Eating Seals of Antiquity
+ 
+ # *DOCUMENTATION*
+diff --git a/fs/proc/Makefile b/fs/proc/Makefile
+index 11a7b5c..df9b09c 100644
+--- a/fs/proc/Makefile
++++ b/fs/proc/Makefile
+@@ -26,3 +26,4 @@ proc-$(CONFIG_PROC_VMCORE)	+= vmcore.o
+ proc-$(CONFIG_PROC_DEVICETREE)	+= proc_devtree.o
+ proc-$(CONFIG_PRINTK)	+= kmsg.o
+ proc-$(CONFIG_PROC_PAGE_MONITOR)	+= page.o
++proc-$(CONFIG_WEB100_STATS)	+= web100.o
+diff --git a/fs/proc/root.c b/fs/proc/root.c
+index b080b79..c2d5c75 100644
+--- a/fs/proc/root.c
++++ b/fs/proc/root.c
+@@ -136,6 +136,10 @@ void __init proc_root_init(void)
+ #endif
+ 	proc_mkdir("bus", NULL);
+ 	proc_sys_init();
++	
++#ifdef CONFIG_WEB100_STATS
++	proc_web100_init();
++#endif
+ }
+ 
+ static int proc_root_getattr(struct vfsmount *mnt, struct dentry *dentry, struct kstat *stat
+diff --git a/fs/proc/web100.c b/fs/proc/web100.c
+new file mode 100644
+index 0000000..a88d778
+--- /dev/null
++++ b/fs/proc/web100.c
+@@ -0,0 +1,1368 @@
++/*  
++ *  fs/proc/web100.c
++ *  
++ * Copyright (C) 2001 Matt Mathis <mathis@psc.edu>
++ * Copyright (C) 2001 John Heffner <jheffner@psc.edu>
++ *
++ * The Web 100 project.  See http://www.web100.org
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++#include <linux/proc_fs.h>
++#include <net/sock.h>
++#include <net/tcp.h>
++#include <net/web100.h>
++#include <linux/init.h>
++#include <linux/sysctl.h>
++#include <linux/mount.h>
++
++#include "internal.h"
++
++#define WEB100MIB_BLOCK_SIZE	PAGE_SIZE - 1024
++
++extern __u32 sysctl_wmem_default;
++extern __u32 sysctl_wmem_max;
++
++struct proc_dir_entry *proc_web100_dir;
++static struct proc_dir_entry *proc_web100_header;
++
++
++/*
++ * Web100 variable reading/writing
++ */
++
++enum web100_connection_inos {
++	PROC_CONN_SPEC_ASCII = 1,
++	PROC_CONN_SPEC,
++	PROC_CONN_READ,
++	PROC_CONN_TEST,
++	PROC_CONN_TUNE,
++	PROC_CONN_HIGH_INO		/* Keep at the end */
++};
++
++enum {
++	WEB100_TYPE_INTEGER = 0,
++	WEB100_TYPE_INTEGER32,
++	WEB100_TYPE_INET_ADDRESS_IPV4,
++	WEB100_TYPE_IP_ADDRESS = WEB100_TYPE_INET_ADDRESS_IPV4, /* Depricated */
++	WEB100_TYPE_COUNTER32,
++	WEB100_TYPE_GAUGE32,
++	WEB100_TYPE_UNSIGNED32,
++	WEB100_TYPE_TIME_TICKS,
++	WEB100_TYPE_COUNTER64,
++	WEB100_TYPE_INET_PORT_NUMBER,
++	WEB100_TYPE_UNSIGNED16 = WEB100_TYPE_INET_PORT_NUMBER, /* Depricated */
++	WEB100_TYPE_INET_ADDRESS,
++	WEB100_TYPE_INET_ADDRESS_IPV6,
++};
++
++struct web100_var;
++typedef int (*web100_rwfunc_t)(void *buf, struct web100stats *stats,
++			       struct web100_var *vp);
++
++/* The printed variable description should look something like this (in ASCII):
++ * varname offset type
++ * where offset is the offset into the file.
++ */
++struct web100_var {
++	char *name;
++	__u32 type;
++	int len;
++	
++	web100_rwfunc_t read;
++	unsigned long read_data;	/* read handler-specific data */
++	
++	web100_rwfunc_t write;
++	unsigned long write_data;	/* write handler-specific data */
++	
++	struct web100_var *next;
++};
++
++struct web100_file {
++	int len;
++	char *name;
++	int low_ino;
++	mode_t mode;
++	
++	struct web100_var *first_var;
++};
++
++#define F(name,ino,perm) { sizeof (name) - 1, (name), (ino), (perm), NULL }
++static struct web100_file web100_file_arr[] = {
++	F("spec-ascii", PROC_CONN_SPEC_ASCII, S_IFREG | S_IRUGO),
++	F("spec", PROC_CONN_SPEC, S_IFREG | S_IRUGO),
++	F("read", PROC_CONN_READ, 0),
++	F("test", PROC_CONN_TEST, 0),
++	F("tune", PROC_CONN_TUNE, 0),
++	F(NULL, 0, 0) };
++#undef F
++#define WEB100_FILE_ARR_SIZE	(sizeof (web100_file_arr) / sizeof (struct web100_file))
++
++/* This works only if the array is built in the correct order. */
++static inline struct web100_file *web100_file_lookup(int ino) {
++	return &web100_file_arr[ino - 1];
++}
++
++static void add_var(struct web100_file *file, char *name, int type,
++	web100_rwfunc_t read, unsigned long read_data,
++	web100_rwfunc_t write, unsigned long write_data)
++{
++	struct web100_var *var;
++	
++	/* Again, assuming add_var is only called at init. */
++	if ((var = kmalloc(sizeof (struct web100_var), GFP_KERNEL)) == NULL)
++		panic("No memory available for Web100 var.\n");
++	
++	var->name = name;
++	var->type = type;
++	switch (type) {
++	case WEB100_TYPE_INET_PORT_NUMBER:
++		var->len = 2;
++		break;
++	case WEB100_TYPE_INTEGER:
++	case WEB100_TYPE_INTEGER32:
++	case WEB100_TYPE_COUNTER32:
++	case WEB100_TYPE_GAUGE32:
++	case WEB100_TYPE_UNSIGNED32:
++	case WEB100_TYPE_TIME_TICKS:
++		var->len = 4;
++		break;
++	case WEB100_TYPE_COUNTER64:
++		var->len = 8;
++		break;
++	case WEB100_TYPE_INET_ADDRESS:
++		var->len = 17;
++		break;
++	default:
++		printk("Web100: Warning: Adding variable of unknown type.\n");
++		var->len = 0;
++	}
++	
++	var->read = read;
++	var->read_data = read_data;
++	
++	var->write = write;
++	var->write_data = write_data;
++	
++	var->next = file->first_var;
++	file->first_var = var;
++}
++
++
++/*
++ * proc filesystem routines
++ */
++
++static struct inode *proc_web100_make_inode(struct super_block *sb, int ino)
++{
++	struct inode *inode;
++	
++	inode = new_inode(sb);
++	if (!inode)
++		goto out;
++	
++	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
++	inode->i_ino = ino;
++	
++	inode->i_uid = 0;
++	inode->i_gid = 0;
++
++out:
++	return inode;
++}
++
++static inline ino_t ino_from_cid(int cid)
++{
++	return (cid << 8) | 0x80000000;
++}
++
++static inline ino_t ino_from_parts(ino_t dir_ino, __u16 low_ino)
++{
++	return (dir_ino & ~0xff) | low_ino;
++}
++
++static inline int cid_from_ino(ino_t ino)
++{
++	return (ino & 0x7fffff00) >> 8;
++}
++
++static inline int low_from_ino(ino_t ino)
++{
++	return ino & 0xff;
++}
++
++static int connection_file_open(struct inode *inode, struct file *file)
++{
++	int cid = cid_from_ino(inode->i_ino);
++	struct web100stats *stats;
++	
++	read_lock_bh(&web100_linkage_lock);
++	stats = web100stats_lookup(cid);
++	if (stats == NULL || stats->wc_dead) {
++		read_unlock_bh(&web100_linkage_lock);
++		return -ENOENT;
++	}
++	web100_stats_use(stats);
++	read_unlock_bh(&web100_linkage_lock);
++	
++	return 0;
++}
++
++static int connection_file_release(struct inode *inode, struct file *file)
++{
++	int cid = cid_from_ino(inode->i_ino);
++	struct web100stats *stats;
++	
++	read_lock_bh(&web100_linkage_lock);
++	stats = web100stats_lookup(cid);
++	if (stats == NULL) {
++		read_unlock_bh(&web100_linkage_lock);
++		return -ENOENT;
++	}
++	read_unlock_bh(&web100_linkage_lock);
++	web100_stats_unuse(stats);
++	
++	return 0;
++}
++
++/**  /proc/web100/<connection>/<binary variable files>  **/
++static ssize_t connection_file_rw(int read, struct file *file,
++	char *buf, size_t nbytes, loff_t *ppos)
++{
++	int low_ino = low_from_ino(file->f_dentry->d_inode->i_ino);
++	int cid = cid_from_ino(file->f_dentry->d_inode->i_ino);
++	struct web100stats *stats;
++	struct web100_file *fp;
++	struct web100_var *vp;
++	int pos;
++	int n;
++	int err;
++	web100_rwfunc_t rwfunc;
++	char *page;
++	
++	/* We're only going to let them read one page at a time.
++	 * We shouldn't ever read more than a page, anyway, though.
++	 */
++	if (nbytes > PAGE_SIZE)
++		nbytes = PAGE_SIZE;
++	
++	if (!access_ok(read ? VERIFY_WRITE : VERIFY_READ, buf, nbytes))
++		return -EFAULT;
++	
++	if ((page = (char *)__get_free_page(GFP_KERNEL)) == NULL)
++		return -ENOMEM;
++	
++	if (!read) {
++		if (copy_from_user(page, buf, nbytes))
++			return -EFAULT;
++	}
++	
++	fp = web100_file_lookup(low_ino);
++	if (fp == NULL) {
++		printk("Unregistered Web100 file.\n");
++		return 0;
++	}
++	
++	read_lock_bh(&web100_linkage_lock);
++	stats = web100stats_lookup(cid);
++	read_unlock_bh(&web100_linkage_lock);
++	if (stats == NULL)
++		return -ENOENT;
++	
++	lock_sock(stats->wc_sk);
++	
++	/* TODO: seek in constant time, not linear.  -JWH */
++	pos = 0;
++	n = 0;
++	vp = fp->first_var;
++	while (vp && nbytes > n) {
++		if (pos > *ppos) {
++			err = -ESPIPE;
++			goto err_out;
++		}
++		if (pos == *ppos) {
++			if (vp->len > nbytes - n)
++				break;
++			
++			if (read)
++				rwfunc = vp->read;
++			else
++				rwfunc = vp->write;
++			if (rwfunc == NULL) {
++				err = -EACCES;
++				goto err_out;
++			}
++			
++			err = rwfunc(page + n, stats, vp);
++			
++			if (err < 0)
++				goto err_out;
++			n += vp->len;
++			*ppos += vp->len;
++		}
++		pos += vp->len;
++		vp = vp->next;
++	}
++	
++	release_sock(stats->wc_sk);
++	
++	if (read) {
++		if (copy_to_user(buf, page, n))
++			return -EFAULT;
++	}
++	free_page((unsigned long)page);
++	
++	return n;
++
++err_out:
++	release_sock(stats->wc_sk);
++	
++	return err;
++}
++
++static ssize_t connection_file_read(struct file *file,
++	char *buf, size_t nbytes, loff_t *ppos)
++{
++	return connection_file_rw(1, file, buf, nbytes, ppos);
++}
++
++static ssize_t connection_file_write(struct file *file,
++	const char *buf, size_t nbytes, loff_t *ppos)
++{
++	return connection_file_rw(0, file, (char *)buf, nbytes, ppos);
++}
++
++static struct file_operations connection_file_fops = {
++	open:		connection_file_open,
++	release:	connection_file_release,
++	read:		connection_file_read,
++	write:		connection_file_write
++};
++
++
++static size_t v6addr_str(char *dest, short *addr)
++{
++	int start = -1, end = -1;
++	int i, j;
++	int pos;
++
++	/* Find longest subsequence of 0's in addr */
++	for (i = 0; i < 8; i++) {
++		if (addr[i] == 0) {
++			for (j = i + 1; addr[j] == 0 && j < 8; j++);
++			if (j - i > end - start) {
++				end = j;
++				start = i;
++			}
++			i = j;
++		}
++	}
++	if (end - start == 1)
++		start = -1;
++
++	pos = 0;
++	for (i = 0; i < 8; i++) {
++		if (i > 0)
++			pos += sprintf(dest + pos, ":");
++		if (i == start) {
++			pos += sprintf(dest + pos, ":");
++			i += end - start - 1;
++		} else {
++			pos += sprintf(dest + pos, "%hx", ntohs(addr[i]));
++		}
++	}
++
++	return pos;
++}
++
++/**  /proc/web100/<connection>/spec_ascii  **/
++static ssize_t connection_spec_ascii_read(struct file * file, char * buf,
++	size_t nbytes, loff_t *ppos)
++{
++	__u32 local_addr, remote_addr;
++	__u16 local_port, remote_port;
++	int cid;
++	struct web100stats *stats;
++	struct web100directs *vars;
++	char tmpbuf[100];
++	int len = 0;
++	
++	if (*ppos != 0)
++		return 0;
++	
++	cid = cid_from_ino(file->f_dentry->d_parent->d_inode->i_ino);
++	
++	read_lock_bh(&web100_linkage_lock);
++	stats = web100stats_lookup(cid);
++	read_unlock_bh(&web100_linkage_lock);
++	if (stats == NULL)
++		return -ENOENT;
++	vars = &stats->wc_vars;
++	
++	if (vars->LocalAddressType == WC_ADDRTYPE_IPV4) {
++		/* These values should not change while stats are linked.
++		 * We don't need to lock the sock. */
++		local_addr = ntohl(vars->LocalAddress.v4addr);
++		remote_addr = ntohl(vars->RemAddress.v4addr);
++		local_port = vars->LocalPort;
++		remote_port = vars->RemPort;
++		
++		len = sprintf(tmpbuf, "%d.%d.%d.%d:%d %d.%d.%d.%d:%d\n",
++			(local_addr >> 24) & 0xff,
++			(local_addr >> 16) & 0xff,
++			(local_addr >> 8) & 0xff,
++			local_addr & 0xff,
++			local_port,
++			(remote_addr >> 24) & 0xff,
++			(remote_addr >> 16) & 0xff,
++			(remote_addr >> 8) & 0xff,
++			remote_addr & 0xff,
++			remote_port);
++	} else if (vars->LocalAddressType == WC_ADDRTYPE_IPV6) {
++		local_port = vars->LocalPort;
++		remote_port = vars->RemPort;
++		
++		len += v6addr_str(tmpbuf + len, (short *)&vars->LocalAddress.v6addr.addr);
++		len += sprintf(tmpbuf + len, ".%d ", local_port);
++		len += v6addr_str(tmpbuf + len, (short *)&vars->RemAddress.v6addr.addr);
++		len += sprintf(tmpbuf + len, ".%d\n", remote_port);
++	} else {
++		printk(KERN_ERR "connection_spec_ascii_read: LocalAddressType invalid\n");
++		return 0;
++	}
++	
++	len = len > nbytes ? nbytes : len;
++	if (copy_to_user(buf, tmpbuf, len))
++		return -EFAULT;
++	*ppos += len;
++	return len;
++}
++
++static struct file_operations connection_spec_ascii_fops = {
++	open:		connection_file_open,
++	release:	connection_file_release,
++	read:		connection_spec_ascii_read
++};
++
++
++/**  /proc/web100/<connection>/  **/
++static int connection_dir_readdir(struct file *filp,
++	void *dirent, filldir_t filldir)
++{
++	int i;
++	struct inode *inode = filp->f_dentry->d_inode;
++	struct web100_file *p;
++	
++	i = filp->f_pos;
++	switch (i) {
++	case 0:
++		if (filldir(dirent, ".", 1, i, inode->i_ino, DT_DIR) < 0)
++			return 0;
++		i++;
++		filp->f_pos++;
++		/* fall through */
++	case 1:
++		if (filldir(dirent, "..", 2, i, proc_web100_dir->low_ino, DT_DIR) < 0)
++			return 0;
++		i++;
++		filp->f_pos++;
++		/* fall through */
++	default:
++		i -= 2;
++		if (i >= WEB100_FILE_ARR_SIZE)
++			return 1;
++		p = &web100_file_arr[i];
++		while (p->name) {
++			if (filldir(dirent, p->name, p->len, filp->f_pos,
++				    ino_from_parts(inode->i_ino, p->low_ino),
++				    p->mode >> 12) < 0)
++				return 0;
++			filp->f_pos++;
++			p++;
++		}
++	}
++	
++	return 1;
++}
++
++static struct dentry *connection_dir_lookup(struct inode *dir,
++	struct dentry *dentry, struct nameidata *nd)
++{
++	struct inode *inode;
++	struct web100_file *p;
++	struct web100stats *stats;
++	uid_t uid;
++	
++	inode = NULL;
++	for (p = &web100_file_arr[0]; p->name; p++) {
++		if (p->len != dentry->d_name.len)
++			continue;
++		if (!memcmp(dentry->d_name.name, p->name, p->len))
++			break;
++	}
++	if (!p->name)
++		return ERR_PTR(-ENOENT);
++	
++	read_lock_bh(&web100_linkage_lock);
++	if ((stats = web100stats_lookup(cid_from_ino(dir->i_ino))) == NULL) {
++		read_unlock_bh(&web100_linkage_lock);
++		printk("connection_dir_lookup: stats == NULL\n");
++		return ERR_PTR(-ENOENT);
++	}
++	uid = sock_i_uid(stats->wc_sk);
++	read_unlock_bh(&web100_linkage_lock);
++	
++	inode = proc_web100_make_inode(dir->i_sb, ino_from_parts(dir->i_ino, p->low_ino));
++	if (!inode)
++		return ERR_PTR(-ENOMEM);
++	inode->i_mode = p->mode ? p->mode : S_IFREG | sysctl_web100_fperms;
++	inode->i_uid = uid;
++	inode->i_gid = sysctl_web100_gid;
++	
++	switch (p->low_ino) {
++	case PROC_CONN_SPEC_ASCII:
++		inode->i_fop = &connection_spec_ascii_fops;
++		break;
++	case PROC_CONN_SPEC:
++	case PROC_CONN_READ:
++	case PROC_CONN_TEST:
++	case PROC_CONN_TUNE:
++		inode->i_fop = &connection_file_fops;
++		break;
++	default:
++		printk("Web100: impossible type (%d)\n", p->low_ino);
++		iput(inode);
++		return ERR_PTR(-EINVAL);
++	}
++	
++	d_add(dentry, inode);
++	return NULL;
++}
++
++static struct inode_operations connection_dir_iops = {
++	.lookup		= connection_dir_lookup
++};
++
++static struct file_operations connection_dir_fops = {
++	.readdir	= connection_dir_readdir
++};
++
++
++/**  /proc/web100/header  **/
++static ssize_t header_read(struct file * file, char * buf,
++	size_t nbytes, loff_t *ppos)
++{
++	int len = 0;
++	loff_t offset;
++	char *tmpbuf;
++	struct web100_file *fp;
++	struct web100_var *vp;
++	int n, tmp;
++	int i;
++	int ret = 0;
++	
++	/* We will assume the variable description list will not change
++	 * after init.  (True at least right now.) Otherwise, we would have
++	 * to have a lock on it.
++	 */
++	
++	if ((tmpbuf = (char *)__get_free_page(GFP_KERNEL)) == NULL)
++		return -ENOMEM;
++	
++	offset = sprintf(tmpbuf, "%s\n", web100_version_string);
++	
++	for (i = 0; i < WEB100_FILE_ARR_SIZE; i++) {
++		int file_offset = 0;
++		
++		if ((fp = &web100_file_arr[i]) == NULL)
++			continue;
++		
++		if (fp->first_var == NULL)
++			continue;
++		
++		offset += sprintf(tmpbuf + offset, "\n/%s\n", fp->name);
++		
++		vp = fp->first_var;
++		while (vp) {
++			if (offset > WEB100MIB_BLOCK_SIZE) {
++				len += offset;
++				if (*ppos < len) {
++					n = min(offset, min_t(loff_t, nbytes, len - *ppos));
++					if (copy_to_user(buf, tmpbuf + max_t(loff_t, *ppos - len + offset, 0), n))
++						return -EFAULT;
++					buf += n;
++					if (nbytes == n) {
++						*ppos += n;
++						ret = n;
++						goto out;
++					}
++				}
++				offset = 0;
++			}
++			
++			offset += sprintf(tmpbuf + offset, "%s %d %d %d\n",
++					  vp->name, file_offset, vp->type, vp->len);
++			file_offset += vp->len;
++			
++			vp = vp->next;
++		}
++	}
++	len += offset;
++	if (*ppos < len) {
++		n = min(offset, min_t(loff_t, nbytes, len - *ppos));
++		if (copy_to_user(buf, tmpbuf + max_t(loff_t, *ppos - len + offset, 0), n))
++			return -EFAULT;
++		if (nbytes <= len - *ppos) {
++			*ppos += nbytes;
++			ret = nbytes;
++			goto out;
++		} else {
++			tmp = len - *ppos;
++			*ppos = len;
++			ret = tmp;
++			goto out;
++		}
++	}
++	
++out:
++	free_page((unsigned long)tmpbuf);
++	return ret;
++}
++
++static struct file_operations header_file_operations = {
++	read:		header_read
++};
++
++
++/**  /proc/web100/  **/
++#define FIRST_CONNECTION_ENTRY	256
++#define NUMBUF_LEN		11
++
++static int get_connection_list(int pos, int *cids, int max)
++{
++	struct web100stats *stats;
++	int n;
++	
++	pos -= FIRST_CONNECTION_ENTRY;
++	n = 0;
++	
++	read_lock_bh(&web100_linkage_lock);
++	
++	stats = web100stats_first;
++	while (stats && n < max) {
++		if (!stats->wc_dead) {
++			if (pos <= 0)
++				cids[n++] = stats->wc_cid;
++			else
++				pos--;
++		}
++		
++		stats = stats->wc_next;
++	}
++	
++	read_unlock_bh(&web100_linkage_lock);
++	
++	return n;
++}
++
++static int cid_to_str(int cid, char *buf)
++{
++	int len, tmp, i;
++	
++	if (cid == 0) { /* a special case */
++		len = 1;
++	} else {
++		tmp = cid;
++		for (len = 0; len < NUMBUF_LEN - 1 && tmp > 0; len++)
++			tmp /= 10;
++	}
++	
++	for (i = 0; i < len; i++) {
++		buf[len - i - 1] = '0' + (cid % 10);
++		cid /= 10;
++	}
++	buf[len] = '\0';
++	
++	return len;
++}
++
++static int web100_dir_readdir(struct file *filp,
++	void *dirent, filldir_t filldir)
++{
++	int err;
++	unsigned n, i;
++	int *cids;
++	int len;
++	ino_t ino;
++	char name[NUMBUF_LEN];
++	int n_conns;
++	
++	if (filp->f_pos < FIRST_CONNECTION_ENTRY) {
++		if ((err = proc_readdir(filp, dirent, filldir)) < 0)
++			return err;
++		filp->f_pos = FIRST_CONNECTION_ENTRY;
++	}
++	n_conns = WEB100_MAX_CONNS * 2;
++	do {
++		n_conns /= 2;
++		cids = kmalloc(n_conns * sizeof (int), GFP_KERNEL);
++	} while (cids == NULL && n_conns > 0);
++	if (cids == NULL)
++		return -ENOMEM;
++	n = get_connection_list(filp->f_pos, cids, n_conns);
++	
++	for (i = 0; i < n; i++) {
++		ino = ino_from_cid(cids[i]);
++		len = cid_to_str(cids[i], name);
++		if (filldir(dirent, name, len, filp->f_pos,
++			    ino, DT_DIR) < 0) {
++			break;
++		}
++		filp->f_pos++;
++	}
++	
++	kfree(cids);
++	
++	return 0;
++}
++
++static inline struct dentry *web100_dir_dent(void)
++{
++	struct qstr qstr;
++	
++	qstr.name = "web100";
++	qstr.len = 6;
++	qstr.hash = full_name_hash(qstr.name, qstr.len);
++	
++	return d_lookup(proc_mnt->mnt_sb->s_root, &qstr);
++}
++
++void web100_proc_nlink_update(nlink_t nlink)
++{
++	struct dentry *dent;
++	
++	dent = web100_dir_dent();
++	if (dent)
++		dent->d_inode->i_nlink = nlink;
++	dput(dent);
++}
++
++int web100_proc_dointvec_update(ctl_table *ctl, int write,
++                               void *buffer, size_t *lenp, loff_t *ppos)
++{
++	unsigned n, i;
++	int *cids;
++	int err;
++	struct qstr qstr;
++	struct dentry *web100_dent, *conn_dent, *dent;
++	struct inode *inode;
++	struct web100_file *p;
++	char name[NUMBUF_LEN];
++	
++	if ((err = proc_dointvec(ctl, write, buffer, lenp, ppos)) != 0)
++		return err;
++	
++	if ((web100_dent = web100_dir_dent()) == NULL)
++		return 0;
++	
++	if ((cids = kmalloc(WEB100_MAX_CONNS * sizeof (int), GFP_KERNEL)) == NULL)
++		return -ENOMEM;
++	n = get_connection_list(FIRST_CONNECTION_ENTRY, cids, WEB100_MAX_CONNS);
++	for (i = 0; i < n; i++) {
++		qstr.len = cid_to_str(cids[i], name);
++		qstr.name = name;
++		qstr.hash = full_name_hash(qstr.name, qstr.len);
++		if ((conn_dent = d_lookup(web100_dent, &qstr)) != NULL) {
++			for (p = &web100_file_arr[0]; p->name; p++) {
++				qstr.name = p->name;
++				qstr.len = p->len;
++				qstr.hash = full_name_hash(qstr.name, qstr.len);
++				if ((dent = d_lookup(conn_dent, &qstr)) != NULL) {
++					inode = dent->d_inode;
++					if ((inode->i_mode = p->mode) == 0)
++						inode->i_mode = S_IFREG | sysctl_web100_fperms;
++					inode->i_gid = sysctl_web100_gid;
++					dput(dent);
++				}
++			}
++			dput(conn_dent);
++		}
++	}
++	dput(web100_dent);
++	kfree(cids);
++	
++	return 0;
++}
++
++static int web100_proc_connection_revalidate(struct dentry *dentry, struct nameidata *nd)
++{
++	int ret = 1;
++	
++	if (dentry->d_inode == NULL)
++		return 0;
++	read_lock_bh(&web100_linkage_lock);
++	if (web100stats_lookup(cid_from_ino(dentry->d_inode->i_ino)) == NULL) {
++		ret = 0;
++		d_drop(dentry);
++	}
++	read_unlock_bh(&web100_linkage_lock);
++	
++	return ret;
++}
++
++static struct dentry_operations web100_dir_dentry_operations = {
++	d_revalidate:	web100_proc_connection_revalidate
++};
++
++static struct dentry *web100_dir_lookup(struct inode *dir,
++	struct dentry *dentry, struct nameidata *nd)
++{
++	char *name;
++	int len;
++	int cid;
++	unsigned c;
++	struct inode *inode;
++	unsigned long ino;
++	struct web100stats *stats;
++	
++	if (proc_lookup(dir, dentry, nd) == NULL)
++		return NULL;
++	
++	cid = 0;
++	name = (char *)(dentry->d_name.name);
++	len = dentry->d_name.len;
++	if (len <= 0)	/* I don't think this can happen */
++		return ERR_PTR(-EINVAL);
++	while (len-- > 0) {
++		c = *name - '0';
++		name++;
++		cid *= 10;
++		cid += c;
++		if (c > 9 || c < 0 || (cid == 0 && len != 0) || cid >= WEB100_MAX_CONNS) {
++			cid = -1;
++			break;
++		}
++	}
++	if (cid < 0)
++		return ERR_PTR(-ENOENT);
++	
++	read_lock_bh(&web100_linkage_lock);
++	stats = web100stats_lookup(cid);
++	if (stats == NULL || stats->wc_dead) {
++		read_unlock_bh(&web100_linkage_lock);
++		return ERR_PTR(-ENOENT);
++	}
++	read_unlock_bh(&web100_linkage_lock);
++	
++	ino = ino_from_cid(cid);
++	inode = proc_web100_make_inode(dir->i_sb, ino);
++	if (inode == NULL)
++		return ERR_PTR(-ENOMEM);
++	inode->i_nlink = 2;
++	inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO;
++	inode->i_flags |= S_IMMUTABLE; /* ? */
++	inode->i_op = &connection_dir_iops;
++	inode->i_fop = &connection_dir_fops;
++	
++	dentry->d_op = &web100_dir_dentry_operations;
++	d_add(dentry, inode);
++	return NULL;
++}
++
++static struct file_operations web100_dir_fops = {
++	.readdir	= web100_dir_readdir
++};
++
++static struct inode_operations web100_dir_iops = {
++	.lookup		= web100_dir_lookup
++};
++
++
++/*
++ * Read/write handlers
++ */
++
++/* A read handler for reading directly from the stats */
++/* read_data is the byte offset into struct web100stats */
++static int read_stats(void *buf, struct web100stats *stats,
++			   struct web100_var *vp)
++{
++	memcpy(buf, (char *)stats + vp->read_data, vp->len);
++	
++	return 0;
++}
++
++/* A write handler for writing directly to the stats */
++/* write_data is a byte offset into struct web100stats */
++static int write_stats(void *buf, struct web100stats *stats,
++			    struct web100_var *vp)
++{
++	memcpy((char *)stats + vp->read_data, buf, vp->len);
++	
++	return 0;
++}
++
++int read_LimCwnd(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->wc_sk);
++	__u32 tmp = (__u32)(tp->snd_cwnd_clamp * tp->mss_cache);
++
++	memcpy(buf, &tmp, 4);
++
++	return 0;
++}
++
++int write_LimCwnd(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->wc_sk);
++	
++	tp->snd_cwnd_clamp = min(*(__u32 *)buf / tp->mss_cache, 65535U);
++	
++	return 0;
++}
++
++int write_LimRwin(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	__u32 val = *(__u32 *)buf;
++	struct tcp_sock *tp = tcp_sk(stats->wc_sk);
++	
++	stats->wc_vars.LimRwin = tp->window_clamp =
++		min(val, 65535U << tp->rx_opt.rcv_wscale);
++	
++	return 0;
++}
++
++int write_Sndbuf(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	int val;
++	struct sock *sk = stats->wc_sk;
++	
++	memcpy(&val, buf, sizeof (int));
++	
++	sk->sk_userlocks |= SOCK_SNDBUF_LOCK;
++	sk->sk_sndbuf = max_t(int, SOCK_MIN_SNDBUF, min_t(int, sysctl_wmem_max, val));
++	sk->sk_write_space(sk);
++
++	return 0;
++}
++
++int write_Rcvbuf(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	int val;
++	struct sock *sk = stats->wc_sk;
++	
++	memcpy(&val, buf, sizeof (int));
++	
++	sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
++	sk->sk_rcvbuf = max_t(int, SOCK_MIN_RCVBUF, min_t(int, sysctl_rmem_max, val));
++	
++	return 0;
++}
++
++int write_State(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	int val;
++	struct sock *sk = stats->wc_sk;
++	
++	memcpy(&val, buf, sizeof (int));
++	if (val != 12) /* deleteTCB, RFC 2012 */
++		return -EINVAL;
++	sk->sk_prot->disconnect(sk, 0);
++	
++	return 0;
++}
++
++extern __u32 sysctl_wmem_default;
++extern __u32 sysctl_rmem_default;
++
++/* A read handler for reading directly from the sk */
++/* read_data is a byte offset into the sk */
++static int read_sk(void *buf, struct web100stats *stats,
++			  struct web100_var *vp)
++{
++	/* Fill data with 0's if the connection is gone. */
++	if (stats->wc_sk == NULL)
++		memset(buf, 0, vp->len);
++	else
++		memcpy(buf, (char *)(stats->wc_sk) + vp->read_data, vp->len);
++	
++	return 0;
++}
++
++static int write_sk(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	if (stats->wc_sk == NULL)
++		return -EIO;
++	else
++		memcpy((char *)(stats->wc_sk) + vp->write_data, buf, vp->len);
++	
++	return 0;
++}
++
++__u64 web100_mono_time()
++{
++#if 1
++	struct timespec now;
++	
++	do_posix_clock_monotonic_gettime(&now);
++	
++	return 1000000ULL * (__u64)now.tv_sec + now.tv_nsec / 1000;
++#else
++	struct timeval now;
++	static struct timeval before;
++
++	do_gettimeofday(&now);
++
++	/* assure monotonic, no matter what */
++	if ((now.tv_sec > before.tv_sec) ||
++	    ((now.tv_sec == before.tv_sec) && (now.tv_usec > before.tv_usec))) {
++		before = now;
++	} else {
++		before.tv_usec++;
++		if (before.tv_usec >= 1000000) {
++			before.tv_usec -= 1000000;
++			before.tv_sec++;
++		}
++	}
++	
++	return (1000000ULL * (__u64)before.tv_sec + before.tv_usec);
++#endif
++}
++
++/* A read handler to get the low part of the current time in usec */
++static int read_now(void *buf, struct web100stats *stats,
++			  struct web100_var *vp)
++{
++	__u64 val;
++
++	val = web100_mono_time();
++	val -= stats->wc_start_monotime;
++	memcpy(buf, (char *)&val, vp->len);
++
++	return 0;
++}
++
++#ifdef CONFIG_WEB100_NET100
++static int write_mss(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	struct sock *sk = stats->wc_sk;
++	struct tcp_sock *tp;
++	__u32 val = *(__u32 *)buf;
++	
++	if (sk == NULL)
++		return -EIO;
++	tp = tcp_sk(sk);
++	
++	if (val > tp->mss_cache)
++		return -EINVAL;
++	if (val < 1)
++		return -EINVAL;
++	
++	tp->mss_cache = val;
++	web100_update_mss(tp);
++	
++	return 0;
++}
++
++static int write_CwndAdjust(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	struct sock *sk = stats->wc_sk;
++	struct tcp_sock *tp;
++	
++	if (sk == NULL)
++		return -EIO;
++	tp = tcp_sk(sk);
++	
++	memcpy(&stats->wc_vars.WAD_CwndAdjust, buf, 4);
++	tp->snd_ssthresh = min_t(__u32, tp->snd_ssthresh,
++	                         tp->snd_cwnd + stats->wc_vars.WAD_CwndAdjust);
++	
++	return 0;
++}
++#endif
++
++#if 0
++static int rw_noop(void *buf, struct web100stats *stats, struct web100_var *vp)
++{
++	return 0;
++}
++#endif
++
++/*
++ * init
++ */
++
++void __init proc_web100_init(void)
++{
++	/* Set up the proc files. */
++	proc_web100_dir = proc_mkdir("web100", NULL);
++	proc_web100_dir->proc_iops = &web100_dir_iops;
++	proc_web100_dir->proc_fops = &web100_dir_fops;
++	
++	proc_web100_header = create_proc_entry("header", S_IFREG | S_IRUGO,
++					       proc_web100_dir);
++	proc_web100_header->proc_fops = &header_file_operations;
++	
++	/* Set up the contents of the proc files. */
++#define OFFSET_IN(type,var)	((unsigned long)(&(((type *)NULL)->var)))
++#define OFFSET_ST(field) ((unsigned long)(&(((struct web100stats *)NULL)->wc_vars.field)))
++#define OFFSET_SK(field) ((unsigned long)(&(((struct sock *)NULL)->field)))
++#define OFFSET_TP(field) ((unsigned long)(&(tcp_sk(NULL)->field)))
++
++#define ADD_RO_STATSVAR(ino,name,type)	\
++add_var(web100_file_lookup(ino), #name, type, \
++	read_stats, OFFSET_ST(name), NULL, 0)
++
++#define ADD_RO_STATSRENAME(ino,name,type,var)	\
++add_var(web100_file_lookup(ino), name, type, \
++	read_stats, OFFSET_ST(var), NULL, 0)
++
++#define ADD_RO_STATSVAR_DEP(ino,name,type)	\
++add_var(web100_file_lookup(ino), "_" #name, type, \
++	read_stats, OFFSET_ST(name), NULL, 0)
++
++#define ADD_WO_STATSVAR(ino,name,type)	\
++add_var(web100_file_lookup(ino), #name, type, NULL, 0, \
++	write_stats, OFFSET_ST(name))
++
++#define ADD_WO_STATSVAR_DEP(ino,name,type)	\
++add_var(web100_file_lookup(ino), "_" #name, type, NULL, 0, \
++	write_stats, OFFSET_ST(name))
++
++#define ADD_RW_STATSVAR(ino,name,type)	\
++add_var(web100_file_lookup(ino), #name, type, \
++	read_stats, OFFSET_ST(name), \
++	write_stats, OFFSET_ST(name))
++
++#define ADD_RW_STATSVAR_DEP(ino,name,type)	\
++add_var(web100_file_lookup(ino), "_" #name, type, \
++	read_stats, OFFSET_ST(name), \
++	write_stats, OFFSET_ST(name))
++
++#define ADD_RO_SKVAR(ino,name,type,var) \
++add_var(web100_file_lookup(ino), #name, type, \
++	read_sk, OFFSET_SK(var), NULL, 0)
++
++#define ADD_RW_SKVAR(ino,name,type,var) \
++add_var(web100_file_lookup(ino), #name, type, \
++	read_sk, OFFSET_SK(var), write_sk, OFFSET_SK(var))
++
++#define ADD_RO_TPVAR(ino,name,type,var) \
++add_var(web100_file_lookup(ino), #name, type, \
++	read_sk, OFFSET_TP(var), write_sk, OFFSET_TP(var))
++
++#define ADD_NOOP(ino,name,type) \
++add_var(web100_file_lookup(ino), #name, type, \
++	rw_noop, 0, rw_noop, 0)
++
++	/* spec */
++	ADD_RO_STATSVAR(PROC_CONN_SPEC, LocalAddressType, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_SPEC, LocalAddress, WEB100_TYPE_INET_ADDRESS);
++	ADD_RO_STATSVAR(PROC_CONN_SPEC, LocalPort, WEB100_TYPE_INET_PORT_NUMBER);
++	ADD_RO_STATSVAR(PROC_CONN_SPEC, RemAddress, WEB100_TYPE_INET_ADDRESS);
++	ADD_RO_STATSVAR(PROC_CONN_SPEC, RemPort, WEB100_TYPE_INET_PORT_NUMBER);
++	ADD_RO_STATSRENAME(PROC_CONN_SPEC, "_RemoteAddress", WEB100_TYPE_INET_ADDRESS, RemAddress);
++	ADD_RO_STATSRENAME(PROC_CONN_SPEC, "_RemotePort", WEB100_TYPE_INET_PORT_NUMBER, RemPort);
++	
++	/* read */
++	/* STATE */
++	ADD_RO_STATSVAR(PROC_CONN_READ, State, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SACKEnabled, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, TimestampsEnabled, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, NagleEnabled, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, ECNEnabled, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SndWinScale, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RcvWinScale, WEB100_TYPE_INTEGER);
++	
++	/* SYN OPTIONS */
++	ADD_RO_STATSVAR(PROC_CONN_READ, ActiveOpen, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MSSRcvd, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, WinScaleRcvd, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, WinScaleSent, WEB100_TYPE_INTEGER);
++	
++	/* DATA */
++	ADD_RO_STATSVAR(PROC_CONN_READ, PktsOut, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DataPktsOut, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, AckPktsOut, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DataBytesOut, WEB100_TYPE_COUNTER64);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PktsIn, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DataPktsIn, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, AckPktsIn, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DataBytesIn, WEB100_TYPE_COUNTER64);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SndUna, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SndNxt, WEB100_TYPE_UNSIGNED32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SndMax, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_snd_una", WEB100_TYPE_COUNTER32, SndUna);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_snd_nxt", WEB100_TYPE_COUNTER32, SndNxt);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_snd_max", WEB100_TYPE_COUNTER32, SndMax);
++	ADD_RO_STATSVAR(PROC_CONN_READ, ThruBytesAcked, WEB100_TYPE_COUNTER64);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_ThruBytesSent", WEB100_TYPE_COUNTER64, ThruBytesAcked);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SndISS, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, SendWraps, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RcvNxt, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_rcv_nxt", WEB100_TYPE_COUNTER32, RcvNxt);
++	ADD_RO_STATSVAR(PROC_CONN_READ, ThruBytesReceived, WEB100_TYPE_COUNTER64);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RecvISS, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, RecvWraps, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, StartTime, WEB100_TYPE_INTEGER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, StartTimeSec, WEB100_TYPE_INTEGER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, StartTimeUsec, WEB100_TYPE_INTEGER32);
++	add_var(web100_file_lookup(PROC_CONN_READ), "Duration", WEB100_TYPE_COUNTER64, read_now, 0, NULL, 0);
++	add_var(web100_file_lookup(PROC_CONN_READ), "_CurrTime", WEB100_TYPE_COUNTER64, read_now, 0, NULL, 0);
++
++	/* SENDER CONGESTION */
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTransSender", WEB100_TYPE_COUNTER32, SndLimTrans[WC_SNDLIM_SENDER]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimBytesSender", WEB100_TYPE_COUNTER64, SndLimBytes[WC_SNDLIM_SENDER]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTimeSender", WEB100_TYPE_COUNTER32, SndLimTime[WC_SNDLIM_SENDER]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTransCwnd", WEB100_TYPE_COUNTER32, SndLimTrans[WC_SNDLIM_CWND]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimBytesCwnd", WEB100_TYPE_COUNTER64, SndLimBytes[WC_SNDLIM_CWND]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTimeCwnd", WEB100_TYPE_COUNTER32, SndLimTime[WC_SNDLIM_CWND]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTransRwin", WEB100_TYPE_COUNTER32, SndLimTrans[WC_SNDLIM_RWIN]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimBytesRwin", WEB100_TYPE_COUNTER64, SndLimBytes[WC_SNDLIM_RWIN]);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "SndLimTimeRwin", WEB100_TYPE_COUNTER32, SndLimTime[WC_SNDLIM_RWIN]);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SlowStart, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CongAvoid, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CongestionSignals, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, OtherReductions, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, X_OtherReductionsCV, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, X_OtherReductionsCM, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CongestionOverCount, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_Recoveries", WEB100_TYPE_COUNTER32, CongestionSignals);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurCwnd, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentCwnd", WEB100_TYPE_GAUGE32, CurCwnd);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxCwnd, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurSsthresh, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentSsthresh", WEB100_TYPE_GAUGE32, CurSsthresh);
++	add_var(web100_file_lookup(PROC_CONN_READ), "LimCwnd", WEB100_TYPE_GAUGE32, read_LimCwnd, 0, NULL, 0);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxSsthresh, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinSsthresh, WEB100_TYPE_GAUGE32);
++
++	/* SENDER PATH MODEL */
++	ADD_RO_STATSVAR(PROC_CONN_READ, FastRetran, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, Timeouts, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SubsequentTimeouts, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurTimeoutCount, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrTimeoutCount", WEB100_TYPE_GAUGE32, CurTimeoutCount);
++	ADD_RO_STATSVAR(PROC_CONN_READ, AbruptTimeouts, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PktsRetrans, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, BytesRetrans, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DupAcksIn, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SACKsRcvd, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SACKBlocksRcvd, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PreCongSumCwnd, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_SumCwndAtCong", WEB100_TYPE_COUNTER32, PreCongSumCwnd);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PreCongSumRTT, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR_DEP(PROC_CONN_READ, PreCongCountRTT, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PostCongSumRTT, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, PostCongCountRTT, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, ECERcvd, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SendStall, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, QuenchRcvd, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RetranThresh, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, NonRecovDA, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, AckAfterFR, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DSACKDups, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SampleRTT, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_SampledRTT", WEB100_TYPE_GAUGE32, SampleRTT);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SmoothedRTT, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RTTVar, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxRTT, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinRTT, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, SumRTT, WEB100_TYPE_COUNTER64);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CountRTT, WEB100_TYPE_COUNTER32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurRTO, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentRTO", WEB100_TYPE_GAUGE32, CurRTO);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxRTO, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinRTO, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurMSS, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentMSS", WEB100_TYPE_GAUGE32, CurMSS);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxMSS, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinMSS, WEB100_TYPE_GAUGE32);
++
++	/* SENDER BUFFER */
++#define PROC_CONN_XTEST PROC_CONN_READ	/* lazy */
++	ADD_RO_SKVAR(PROC_CONN_READ, _Sndbuf, WEB100_TYPE_GAUGE32, sk_sndbuf);
++	ADD_RO_SKVAR(PROC_CONN_READ, X_Sndbuf, WEB100_TYPE_GAUGE32, sk_sndbuf);
++	ADD_RO_SKVAR(PROC_CONN_READ, X_Rcvbuf, WEB100_TYPE_GAUGE32, sk_rcvbuf);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurRetxQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurRetranQueue", WEB100_TYPE_GAUGE32, CurRetxQueue);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxRetxQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_MaxRetranQueue", WEB100_TYPE_GAUGE32, MaxRetxQueue);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurAppWQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxAppWQueue, WEB100_TYPE_GAUGE32);
++	
++	/* SENDER BUFFER TUNING - See below */
++
++	/* LOCAL RECEIVER */
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurRwinSent, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentRwinSent", WEB100_TYPE_GAUGE32, CurRwinSent);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxRwinSent, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinRwinSent, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, LimRwin, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, DupAcksOut, WEB100_TYPE_COUNTER32);
++	ADD_RO_SKVAR(PROC_CONN_READ, _Rcvbuf, WEB100_TYPE_GAUGE32, sk_rcvbuf);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurReasmQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxReasmQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurAppRQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxAppRQueue, WEB100_TYPE_GAUGE32);
++	ADD_RO_TPVAR(PROC_CONN_XTEST, X_rcv_ssthresh, WEB100_TYPE_GAUGE32, rcv_ssthresh);
++	ADD_RO_TPVAR(PROC_CONN_XTEST, X_wnd_clamp, WEB100_TYPE_GAUGE32, window_clamp);
++	ADD_RO_STATSVAR(PROC_CONN_XTEST, X_dbg1, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_XTEST, X_dbg2, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_XTEST, X_dbg3, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_XTEST, X_dbg4, WEB100_TYPE_GAUGE32);
++
++	/* OBSERVED RECEIVER */
++	ADD_RO_STATSVAR(PROC_CONN_READ, CurRwinRcvd, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_CurrentRwinRcvd", WEB100_TYPE_GAUGE32, CurRwinRcvd);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MaxRwinRcvd, WEB100_TYPE_GAUGE32);
++	ADD_RO_STATSVAR(PROC_CONN_READ, MinRwinRcvd, WEB100_TYPE_GAUGE32);
++
++	/* CONNECTION ID */
++	ADD_RO_STATSVAR(PROC_CONN_READ, LocalAddressType, WEB100_TYPE_INTEGER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, LocalAddress, WEB100_TYPE_INET_ADDRESS);
++	ADD_RO_STATSVAR(PROC_CONN_READ, LocalPort, WEB100_TYPE_INET_PORT_NUMBER);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RemAddress, WEB100_TYPE_INET_ADDRESS);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_RemoteAddress", WEB100_TYPE_INET_ADDRESS, RemAddress);
++	ADD_RO_STATSVAR(PROC_CONN_READ, RemPort, WEB100_TYPE_INET_PORT_NUMBER);
++	ADD_RO_STATSRENAME(PROC_CONN_READ, "_RemotePort", WEB100_TYPE_INET_PORT_NUMBER, RemPort);
++	
++	ADD_RO_STATSVAR(PROC_CONN_READ, X_RcvRTT, WEB100_TYPE_GAUGE32);
++	
++	/* tune */
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "LimCwnd",
++		WEB100_TYPE_GAUGE32, read_LimCwnd, 0,
++		write_LimCwnd, 0);
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "LimRwin",
++		WEB100_TYPE_GAUGE32, read_stats, OFFSET_ST(LimRwin),
++		write_LimRwin, 0);
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "X_Sndbuf",
++		WEB100_TYPE_GAUGE32, read_sk, OFFSET_SK(sk_sndbuf),
++		write_Sndbuf, 0);
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "X_Rcvbuf",
++		WEB100_TYPE_GAUGE32, read_sk, OFFSET_SK(sk_rcvbuf),
++		write_Rcvbuf, 0);
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "State",
++		WEB100_TYPE_INTEGER, read_stats, OFFSET_ST(State),
++		write_State, 0);
++#ifdef CONFIG_WEB100_NET100
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "CurMSS",
++	        WEB100_TYPE_GAUGE32, read_stats, OFFSET_ST(CurMSS),
++	        write_mss, 0);
++#endif
++
++#ifdef CONFIG_WEB100_NET100
++	ADD_RW_STATSVAR(PROC_CONN_TUNE, WAD_IFQ, WEB100_TYPE_GAUGE32);
++	ADD_RW_STATSVAR(PROC_CONN_TUNE, WAD_MaxBurst, WEB100_TYPE_GAUGE32);
++	ADD_RW_STATSVAR(PROC_CONN_TUNE, WAD_MaxSsthresh, WEB100_TYPE_GAUGE32);
++	ADD_RW_STATSVAR(PROC_CONN_TUNE, WAD_NoAI, WEB100_TYPE_INTEGER);
++	add_var(web100_file_lookup(PROC_CONN_TUNE), "WAD_CwndAdjust",
++	        WEB100_TYPE_INTEGER32, read_stats, OFFSET_ST(WAD_CwndAdjust),
++	        write_CwndAdjust, 0);
++#endif
++}
+diff --git a/include/linux/netlink.h b/include/linux/netlink.h
+index ab5d312..9cc202b 100644
+--- a/include/linux/netlink.h
++++ b/include/linux/netlink.h
+@@ -24,6 +24,7 @@
+ /* leave room for NETLINK_DM (DM Events) */
+ #define NETLINK_SCSITRANSPORT	18	/* SCSI Transports */
+ #define NETLINK_ECRYPTFS	19
++#define NETLINK_WEB100		29
+ 
+ #define MAX_LINKS 32		
+ 
+diff --git a/include/linux/proc_fs.h b/include/linux/proc_fs.h
+index 379eaed..85aa647 100644
+--- a/include/linux/proc_fs.h
++++ b/include/linux/proc_fs.h
+@@ -104,6 +104,10 @@ struct vmcore {
+ 
+ extern void proc_root_init(void);
+ 
++#ifdef CONFIG_WEB100_STATS
++extern void proc_web100_init(void);
++#endif
++
+ void proc_flush_task(struct task_struct *task);
+ 
+ extern struct proc_dir_entry *create_proc_entry(const char *name, mode_t mode,
+diff --git a/include/linux/sysctl.h b/include/linux/sysctl.h
+index 1e4743e..bcc9b00 100644
+--- a/include/linux/sysctl.h
++++ b/include/linux/sysctl.h
+@@ -995,6 +995,10 @@ extern int proc_doulongvec_minmax(struct ctl_table *, int,
+ 				  void __user *, size_t *, loff_t *);
+ extern int proc_doulongvec_ms_jiffies_minmax(struct ctl_table *table, int,
+ 				      void __user *, size_t *, loff_t *);
++#ifdef CONFIG_WEB100_STATS
++extern int web100_proc_dointvec_update(struct ctl_table *, int,
++                                       void __user *, size_t *, loff_t *);
++#endif
+ 
+ extern int do_sysctl (int __user *name, int nlen,
+ 		      void __user *oldval, size_t __user *oldlenp,
+diff --git a/include/linux/tcp.h b/include/linux/tcp.h
+index 61723a7..c6832e3 100644
+--- a/include/linux/tcp.h
++++ b/include/linux/tcp.h
+@@ -406,6 +406,10 @@ struct tcp_sock {
+ /* TCP MD5 Signature Option information */
+ 	struct tcp_md5sig_info	*md5sig_info;
+ #endif
++
++#ifdef CONFIG_WEB100_STATS
++	struct web100stats	*tcp_stats;
++#endif
+ };
+ 
+ static inline struct tcp_sock *tcp_sk(const struct sock *sk)
+diff --git a/include/net/tcp.h b/include/net/tcp.h
+index 03a49c7..2640f28 100644
+--- a/include/net/tcp.h
++++ b/include/net/tcp.h
+@@ -45,6 +45,8 @@
+ 
+ #include <linux/seq_file.h>
+ 
++#include <net/web100.h>
++
+ extern struct inet_hashinfo tcp_hashinfo;
+ 
+ extern struct percpu_counter tcp_orphan_count;
+@@ -237,6 +239,14 @@ extern int sysctl_tcp_base_mss;
+ extern int sysctl_tcp_workaround_signed_windows;
+ extern int sysctl_tcp_slow_start_after_idle;
+ extern int sysctl_tcp_max_ssthresh;
++#ifdef CONFIG_WEB100_NET100
++extern int sysctl_WAD_IFQ;
++extern int sysctl_WAD_MaxBurst;
++#endif
++#ifdef CONFIG_WEB100_STATS
++extern int sysctl_web100_fperms;
++extern int sysctl_web100_gid;
++#endif
+ 
+ extern atomic_t tcp_memory_allocated;
+ extern struct percpu_counter tcp_sockets_allocated;
+@@ -829,6 +839,10 @@ extern __u32 tcp_init_cwnd(struct tcp_sock *tp, struct dst_entry *dst);
+  */
+ static __inline__ __u32 tcp_max_burst(const struct tcp_sock *tp)
+ {
++#ifdef CONFIG_WEB100_NET100
++	return max_t(int, tp->reordering,
++		     NET100_WAD(tp, WAD_MaxBurst, sysctl_WAD_MaxBurst));
++#endif
+ 	return tp->reordering;
+ }
+ 
+diff --git a/include/net/web100.h b/include/net/web100.h
+new file mode 100644
+index 0000000..7ca1b54
+--- /dev/null
++++ b/include/net/web100.h
+@@ -0,0 +1,123 @@
++/* 
++ *  include/net/web100.h
++ *  
++ * Copyright (C) 2001 Matt Mathis <mathis@psc.edu>
++ * Copyright (C) 2001 John Heffner <jheffner@psc.edu>
++ *
++ * The Web 100 project.  See http://www.web100.org
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++#ifndef _WEB100_H
++#define _WEB100_H
++
++#include <net/sock.h>
++#include <net/web100_stats.h>
++#include <linux/tcp.h>
++
++#ifdef CONFIG_WEB100_STATS
++
++#define WEB100_MAX_CONNS	(1<<15)
++
++#define WEB100_DELAY_MAX	HZ
++
++/* Netlink */
++#define WC_NL_TYPE_CONNECT	0
++#define WC_NL_TYPE_DISCONNECT	1
++
++struct web100_netlink_msg {
++	int type;
++	int cid;
++};
++
++/* The syntax of this version string is subject to future changes */
++extern char *web100_version_string;
++
++/* Stats structures */
++extern struct web100stats *web100stats_arr[];
++extern struct web100stats *web100stats_first;
++
++/* For locking the creation and destruction of stats structures. */
++extern rwlock_t web100_linkage_lock;
++
++/* For /proc/web100 */
++extern struct web100stats *web100stats_lookup(int cid);
++
++/* For the TCP code */
++extern int  web100_stats_create(struct sock *sk);
++extern void web100_stats_destroy(struct web100stats *stats);
++extern void web100_stats_free(struct web100stats *stats);
++extern void web100_stats_establish(struct sock *sk);
++
++extern void web100_tune_sndbuf_ack(struct sock *sk);
++extern void web100_tune_sndbuf_snd(struct sock *sk);
++extern void web100_tune_rcvbuf(struct sock *sk);
++
++extern void web100_update_snd_nxt(struct tcp_sock *tp);
++extern void web100_update_snd_una(struct tcp_sock *tp);
++extern void web100_update_rtt(struct sock *sk, unsigned long rtt_sample);
++extern void web100_update_timeout(struct sock *sk);
++extern void web100_update_mss(struct tcp_sock *tp);
++extern void web100_update_cwnd(struct tcp_sock *tp);
++extern void web100_update_rwin_rcvd(struct tcp_sock *tp);
++extern void web100_update_sndlim(struct tcp_sock *tp, int why);
++extern void web100_update_rcv_nxt(struct tcp_sock *tp);
++extern void web100_update_rwin_sent(struct tcp_sock *tp);
++extern void web100_update_congestion(struct tcp_sock *tp, int why);
++extern void web100_update_segsend(struct sock *sk, int len, int pcount,
++                                  __u32 seq, __u32 end_seq, int flags);
++extern void web100_update_segrecv(struct tcp_sock *tp, struct sk_buff *skb);
++extern void web100_update_rcvbuf(struct sock *sk, int rcvbuf);
++extern void web100_update_writeq(struct sock *sk);
++extern void web100_update_recvq(struct sock *sk);
++extern void web100_update_ofoq(struct sock *sk);
++
++extern void web100_stats_init(void);
++
++/* For the IP code */
++extern int web100_delay_output(struct sk_buff *skb, int (*output)(struct sk_buff *));
++
++extern __u64 web100_mono_time(void);
++
++/* You may have to hold web100_linkage_lock here to prevent
++   stats from disappearing. */
++static inline void web100_stats_use(struct web100stats *stats)
++{
++	atomic_inc(&stats->wc_users);
++}
++
++/* You MUST NOT hold web100_linkage_lock here. */
++static inline void web100_stats_unuse(struct web100stats *stats)
++{
++	if (atomic_dec_and_test(&stats->wc_users))
++		web100_stats_free(stats);
++}
++
++/* A mapping between Linux and Web100 states.  This could easily just
++ * be an array. */
++static inline int web100_state(int state)
++{
++	switch (state) {
++	case TCP_ESTABLISHED:	return WC_STATE_ESTABLISHED;
++	case TCP_SYN_SENT:	return WC_STATE_SYNSENT;
++	case TCP_SYN_RECV:	return WC_STATE_SYNRECEIVED;
++	case TCP_FIN_WAIT1:	return WC_STATE_FINWAIT1;
++	case TCP_FIN_WAIT2:	return WC_STATE_FINWAIT2;
++	case TCP_TIME_WAIT:	return WC_STATE_TIMEWAIT;
++	case TCP_CLOSE:		return WC_STATE_CLOSED;
++	case TCP_CLOSE_WAIT:	return WC_STATE_CLOSEWAIT;
++	case TCP_LAST_ACK:	return WC_STATE_LASTACK;
++	case TCP_LISTEN:	return WC_STATE_LISTEN;
++	case TCP_CLOSING:	return WC_STATE_CLOSING;
++	default:		return 0;
++	}
++}
++
++#endif /* CONFIG_WEB100_STATS */
++
++#endif /* _WEB100_H */
+diff --git a/include/net/web100_stats.h b/include/net/web100_stats.h
+new file mode 100644
+index 0000000..12d81d0
+--- /dev/null
++++ b/include/net/web100_stats.h
+@@ -0,0 +1,346 @@
++/*
++ * include/net/web100_stats.h
++ *
++ * Copyright (C) 2001 Matt Mathis <mathis@psc.edu>
++ * Copyright (C) 2001 John Heffner <jheffner@psc.edu>
++ * Copyright (C) 2000 Jeff Semke <semke@psc.edu>
++ *
++ * The Web 100 project.  See http://www.web100.org
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++/* TODO: make sure that the time duration states below include:
++   Congestion Avoidance, Slow Start, Timeouts, Idle Application, and
++   Window Limited cases */
++/* TODO: Consider adding sysctl variable to enable/disable WC stats updates.
++   Probably should still create stats structures if compiled with WC support,
++   even if sysctl(wc) is turned off.  That would allow the stats to be updated
++   if the sysctl(wc) is turned back on. */
++/* TODO: Add all variables needed to do user-level auto-tuning, including
++   writeable parameters */
++
++
++#ifndef _WEB100_STATS_H
++#define _WEB100_STATS_H
++
++enum wc_sndlim_states {
++	WC_SNDLIM_NONE = -1,
++	WC_SNDLIM_SENDER,
++	WC_SNDLIM_CWND,
++	WC_SNDLIM_RWIN,
++	WC_SNDLIM_STARTUP,
++	WC_SNDLIM_NSTATES	/* Keep at end */
++};
++
++#ifndef CONFIG_WEB100_STATS
++
++#define WEB100_VAR_INC(tp,var)		do {} while (0)
++#define WEB100_VAR_DEC(tp,var)		do {} while (0)
++#define WEB100_VAR_SET(tp,var,val)	do {} while (0)
++#define WEB100_VAR_ADD(tp,var,val)	do {} while (0)
++#define WEB100_UPDATE_FUNC(tp,func)	do {} while (0)
++#define NET100_WAD(tp, var, def)	(def)
++
++#else /* CONFIG_WEB100_STATS */ /* { */
++
++#include <linux/spinlock.h>
++
++#define WEB100_CHECK(tp,expr) \
++	do { if ((tp)->tcp_stats) (expr); } while (0)
++#define WEB100_VAR_INC(tp,var) \
++	WEB100_CHECK(tp, ((tp)->tcp_stats->wc_vars.var)++)
++#define WEB100_VAR_DEC(tp,var) \
++	WEB100_CHECK(tp, ((tp)->tcp_stats->wc_vars.var)--)
++#define WEB100_VAR_ADD(tp,var,val) \
++	WEB100_CHECK(tp, ((tp)->tcp_stats->wc_vars.var) += (val))
++#define WEB100_VAR_SET(tp,var,val) \
++	WEB100_CHECK(tp, ((tp)->tcp_stats->wc_vars.var) = (val))
++#define WEB100_UPDATE_FUNC(tp,func) \
++	WEB100_CHECK(tp, func)
++#ifdef CONFIG_WEB100_NET100
++#define NET100_WAD(tp, var, def) \
++	(((tp)->tcp_stats && (tp)->tcp_stats->wc_vars.var) ? (tp)->tcp_stats->wc_vars.var : (def))
++#else
++#define NET100_WAD(tp, var, def)	(def)
++#endif
++
++/* SMIv2 types - RFC 1902 */
++typedef __s32		INTEGER;
++typedef INTEGER		Integer32;
++typedef __u32		IpAddress;
++typedef __u32		Counter32;
++typedef __u32		Unsigned32;
++typedef Unsigned32	Gauge32;
++typedef __u32		TimeTicks;
++typedef __u64		Counter64;
++typedef __u16		Unsigned16;
++
++/* New inet address types specified in INET-ADDRESS-MIB */
++typedef Unsigned16	InetPortNumber;
++typedef enum {
++	WC_ADDRTYPE_UNKNOWN = 0,
++	WC_ADDRTYPE_IPV4,
++	WC_ADDRTYPE_IPV6,
++	WC_ADDRTYPE_DNS = 16
++} InetAddressType;
++typedef IpAddress	InetAddresIPv4;
++typedef struct {
++	__u8	addr[16];
++	__u8	type;
++} InetAddresIPv6;
++typedef union {
++	InetAddresIPv4	v4addr;
++	InetAddresIPv6	v6addr;
++} InetAddress;
++
++typedef enum {
++	truthValueTrue = 1,
++	truthValueFalse = 2
++} TruthValue;
++
++enum wc_states {
++	WC_STATE_CLOSED = 1,
++	WC_STATE_LISTEN,
++	WC_STATE_SYNSENT,
++	WC_STATE_SYNRECEIVED,
++	WC_STATE_ESTABLISHED,
++	WC_STATE_FINWAIT1,
++	WC_STATE_FINWAIT2,
++	WC_STATE_CLOSEWAIT,
++	WC_STATE_LASTACK,
++	WC_STATE_CLOSING,
++	WC_STATE_TIMEWAIT,
++	WC_STATE_DELETECB
++};
++
++enum wc_stunemodes {
++	WC_STUNEMODE_DEFAULT = 0,	/* OS native */
++	WC_STUNEMODE_SETSOCKOPT,	/* OS native setsockopt() */
++	WC_STUNEMODE_FIXED,		/* Manual via the web100 API */
++	WC_STUNEMODE_AUTO,
++	WC_STUNEMODE_EXP1,
++	WC_STUNEMODE_EXP2
++};
++
++enum wc_rtunemodes {
++	WC_RTUNEMODE_DEFAULT = 0,
++	WC_RTUNEMODE_SETSOCKOPT,
++	WC_RTUNEMODE_FIXED,
++	WC_RTUNEMODE_AUTO,
++	WC_RTUNEMODE_EXP1,
++	WC_RTUNEMODE_EXP2
++};
++
++enum wc_bufmodes {
++	WC_BUFMODE_OS = 0,
++	WC_BUFMODE_WEB100,
++};
++
++enum {
++	WC_SE_BELOW_DATA_WINDOW = 1,
++	WC_SE_ABOVE_DATA_WINDOW,
++	WC_SE_BELOW_ACK_WINDOW,
++	WC_SE_ABOVE_ACK_WINDOW,
++	WC_SE_BELOW_TSW_WINDOW,
++	WC_SE_ABOVE_TSW_WINDOW,
++	WC_SE_DATA_CHECKSUM
++};
++
++
++/*
++ * Variables that can be read and written directly.
++ * 
++ * Should contain most variables from TCP-KIS 0.1.  Commented feilds are
++ * either not implemented or have handlers and do not need struct storage.
++ */
++struct web100directs {
++	/* STATE */
++	INTEGER		State;
++	TruthValue	SACKEnabled;
++	TruthValue	TimestampsEnabled;
++	TruthValue	NagleEnabled;
++	TruthValue	ECNEnabled;
++	Integer32	SndWinScale;
++	Integer32	RcvWinScale;
++	
++	/* SYN OPTIONS */
++	INTEGER		ActiveOpen;
++     /* Gauge32		MSSSent; */
++	Gauge32		MSSRcvd;
++	Integer32	WinScaleRcvd;
++	Integer32	WinScaleSent;
++     /* INTEGER		SACKokSent; */
++     /* INTEGER		SACKokRcvd; */
++     /* INTEGER		TimestampSent; */
++     /* INTEGER		TimestampRcvd; */
++	
++	/* DATA */
++	Counter32	PktsOut;
++	Counter32	DataPktsOut;
++	Counter32	AckPktsOut;		/* DEPRICATED */
++	Counter64	DataBytesOut;
++	Counter32	PktsIn;
++	Counter32	DataPktsIn;
++	Counter32	AckPktsIn;		/* DEPRICATED */
++	Counter64	DataBytesIn;
++     /* Counter32	SoftErrors; */
++     /* INTEGER		SoftErrorReason; */
++	Counter32	SndUna;
++	Unsigned32	SndNxt;
++	Counter32	SndMax;
++	Counter64	ThruBytesAcked;
++	Counter32	SndISS;			/* SndInitial */
++	Counter32	SendWraps;		/* DEPRICATED */
++	Counter32	RcvNxt;
++	Counter64	ThruBytesReceived;
++	Counter32	RecvISS;		/* RecInitial */
++	Counter32	RecvWraps;		/* DEPRICATED */
++     /* Counter64	Duration; */
++	Integer32	StartTime;		/* DEPRICATED */
++	Integer32	StartTimeSec;
++	Integer32	StartTimeUsec;
++
++	/* SENDER CONGESTION */
++	Counter32	SndLimTrans[WC_SNDLIM_NSTATES];
++	Counter32	SndLimTime[WC_SNDLIM_NSTATES];
++	Counter64	SndLimBytes[WC_SNDLIM_NSTATES];
++	Counter32	SlowStart;
++	Counter32	CongAvoid;
++	Counter32	CongestionSignals;
++	Counter32	OtherReductions;
++	Counter32	X_OtherReductionsCV;
++	Counter32	X_OtherReductionsCM;
++	Counter32	CongestionOverCount;
++	Gauge32		CurCwnd;
++	Gauge32		MaxCwnd;
++     /* Gauge32		LimCwnd; */
++	Gauge32		CurSsthresh;
++	Gauge32		MaxSsthresh;
++	Gauge32		MinSsthresh;
++
++	/* SENDER PATH MODEL */
++	Counter32	FastRetran;
++	Counter32	Timeouts;
++	Counter32	SubsequentTimeouts;
++	Gauge32		CurTimeoutCount;
++	Counter32	AbruptTimeouts;
++	Counter32	PktsRetrans;
++	Counter32	BytesRetrans;
++	Counter32	DupAcksIn;
++	Counter32	SACKsRcvd;
++     	Counter32	SACKBlocksRcvd;
++     	Counter32	PreCongSumCwnd;
++	Counter32	PreCongSumRTT;
++	Counter32	PreCongCountRTT;	/* DEPRICATED */
++	Counter32	PostCongSumRTT;
++	Counter32	PostCongCountRTT;
++     /* Counter32	ECNsignals; */
++	Counter32	ECERcvd;
++	Counter32	SendStall;
++	Counter32	QuenchRcvd;
++	Gauge32		RetranThresh;
++     /* Counter32	SndDupAckEpisodes; */
++     /* Counter64	SumBytesReordered; */
++	Counter32	NonRecovDA;
++	Counter32	AckAfterFR;
++	Counter32	DSACKDups;
++	Gauge32		SampleRTT;
++	Gauge32		SmoothedRTT;
++	Gauge32		RTTVar;
++	Gauge32		MaxRTT;
++	Gauge32		MinRTT;
++	Counter64	SumRTT;
++	Counter32	CountRTT;
++	Gauge32		CurRTO;
++	Gauge32		MaxRTO;
++	Gauge32		MinRTO;
++	Gauge32		CurMSS;
++	Gauge32		MaxMSS;
++	Gauge32		MinMSS;
++
++	/* LOCAL SENDER BUFFER */
++	Gauge32		CurRetxQueue;
++	Gauge32		MaxRetxQueue;
++	Gauge32		CurAppWQueue;
++	Gauge32		MaxAppWQueue;
++
++	/* LOCAL RECEIVER */
++	Gauge32		CurRwinSent;
++	Gauge32		MaxRwinSent;
++	Gauge32		MinRwinSent;
++	Integer32	LimRwin;
++     /* Counter32	DupAckEpisodes; */
++	Counter32	DupAcksOut;
++     /* Counter32	CERcvd; */
++     /* Counter32	ECNSent; */
++     /* Counter32	ECNNonceRcvd; */
++	Gauge32		CurReasmQueue;
++	Gauge32		MaxReasmQueue;
++	Gauge32		CurAppRQueue;
++	Gauge32		MaxAppRQueue;
++	Gauge32		X_rcv_ssthresh;
++	Gauge32		X_wnd_clamp;
++	Gauge32		X_dbg1;
++	Gauge32		X_dbg2;
++	Gauge32		X_dbg3;
++	Gauge32		X_dbg4;
++
++	/* OBSERVED RECEIVER */
++	Gauge32		CurRwinRcvd;
++	Gauge32		MaxRwinRcvd;
++	Gauge32		MinRwinRcvd;
++
++	/* CONNECTION ID */
++	InetAddressType	LocalAddressType;
++	InetAddress	LocalAddress;
++	InetPortNumber	LocalPort;
++     /* InetAddressType	RemAddressType;	*/
++	InetAddress	RemAddress;
++	InetPortNumber	RemPort;
++     /* Integer32	IdId; */
++	
++	Gauge32		X_RcvRTT;
++	
++#ifdef CONFIG_WEB100_NET100
++	/* support for the NET100 Work Around Deamon (WAD) */
++	Gauge32		WAD_IFQ;
++	Gauge32		WAD_MaxBurst;
++	Gauge32         WAD_MaxSsthresh;
++	INTEGER		WAD_NoAI;
++	Integer32	WAD_CwndAdjust;
++#endif
++};
++
++struct web100stats {
++	int			wc_cid;
++	
++	struct sock		*wc_sk;
++	
++	atomic_t		wc_users;
++	__u8			wc_dead;
++	
++	struct web100stats	*wc_next;
++	struct web100stats	*wc_prev;
++	
++	struct web100stats	*wc_hash_next;
++	struct web100stats	*wc_hash_prev;
++	
++	struct web100stats	*wc_death_next;
++	
++	int			wc_limstate;
++	__u64			wc_limstate_bytes;
++	__u64			wc_limstate_time;
++	
++	__u64			wc_start_monotime;
++	
++	struct web100directs	wc_vars;
++};
++
++#endif /* CONFIG_WEB100_STATS */ /* } */
++
++#endif		/*_WEB100_STATS_H */
+diff --git a/net/ipv4/Kconfig b/net/ipv4/Kconfig
+index 70491d9..dd67b51 100644
+--- a/net/ipv4/Kconfig
++++ b/net/ipv4/Kconfig
+@@ -627,3 +627,67 @@ config TCP_MD5SIG
+ 
+ 	  If unsure, say N.
+ 
++menuconfig WEB100
++	bool "IP: Web100 networking enhancements"
++	depends on INET && EXPERIMENTAL
++
++if WEB100
++
++config WEB100_STATS
++	bool "Web100: Extended TCP statistics"
++	depends on WEB100
++	---help---
++	  Support for the Web100 implementation of the TCP extended stastics
++	  MIB (see http://www.web100.org/mib/).
++
++if WEB100_STATS
++
++config WEB100_FPERMS
++	int "Web100:   Default file permissions"
++	depends on WEB100_STATS
++	default "384"
++	---help---
++	  This controls the default file permission bits on the Web100
++	  files in /proc/web100.  This value can be changed at runtime using
++	  the sysctl variable net.ipv4.web100_fperms.  Unless all users on
++	  the system are trusted, it is safest to limit both readability
++	  and writability to trusted users.
++	  
++	  Due to limitations of the kernel config scripts, this is a decimal
++	  value rather than octal.  Some common values:
++	  
++	    384 = 0600 = rw-------
++	    416 = 0640 = rw-r-----
++	    432 = 0660 = rw-rw----
++	    436 = 0664 = rw-rw-r--
++	    438 = 0666 = rw-rw-rw-
++
++config WEB100_GID
++	int "Web100:   Default gid"
++	depends on WEB100_STATS
++	default "0"
++	---help---
++	  This will be the default group of the Web100 files in /proc/web100.
++	  It may be useful to create a "web100" group on your system, and set
++	  CONFIG_WEB100_FPERMS (above) with special group permissions.  This
++	  value can be changed at runtime using the sysctl variable
++	  net.ipv4.web100_gid.
++
++config WEB100_NET100
++	bool "Web100:   Net100 extensions"
++	depends on WEB100_STATS
++	---help---
++	  Enables certain "Net100" extensions to TCP that are controlled by
++	  writable MIB variables.  These controls may be particularly useful
++	  for specially tuning a flow on a long fast network.
++
++endif
++
++config WEB100_NETLINK
++	bool "Web100: Netlink event notification service"
++	depends on WEB100
++	---help---
++	  Required by the Net100 Work Around Daemon (WAD).
++
++endif
++
+diff --git a/net/ipv4/Makefile b/net/ipv4/Makefile
+index 80ff87c..e3e55f2 100644
+--- a/net/ipv4/Makefile
++++ b/net/ipv4/Makefile
+@@ -32,6 +32,7 @@ obj-$(CONFIG_INET_TUNNEL) += tunnel4.o
+ obj-$(CONFIG_INET_XFRM_MODE_TRANSPORT) += xfrm4_mode_transport.o
+ obj-$(CONFIG_INET_XFRM_MODE_TUNNEL) += xfrm4_mode_tunnel.o
+ obj-$(CONFIG_IP_PNP) += ipconfig.o
++obj-$(CONFIG_WEB100_STATS) += web100_stats.o
+ obj-$(CONFIG_NETFILTER)	+= netfilter.o netfilter/
+ obj-$(CONFIG_INET_DIAG) += inet_diag.o 
+ obj-$(CONFIG_INET_TCP_DIAG) += tcp_diag.o
+diff --git a/net/ipv4/sysctl_net_ipv4.c b/net/ipv4/sysctl_net_ipv4.c
+index 2dcf04d..1399d12 100644
+--- a/net/ipv4/sysctl_net_ipv4.c
++++ b/net/ipv4/sysctl_net_ipv4.c
+@@ -712,6 +712,42 @@ static struct ctl_table ipv4_table[] = {
+ 		.mode		= 0644,
+ 		.proc_handler	= proc_dointvec,
+ 	},
++#ifdef CONFIG_WEB100_NET100
++	{
++		.ctl_name	= CTL_UNNUMBERED,
++		.procname	= "WAD_IFQ",
++		.data		= &sysctl_WAD_IFQ,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= &proc_dointvec,
++	},
++	{
++		.ctl_name	= CTL_UNNUMBERED,
++		.procname	= "WAD_MaxBurst",
++		.data		= &sysctl_WAD_MaxBurst,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= &proc_dointvec,
++	},
++#endif
++#ifdef CONFIG_WEB100_STATS
++	{
++		.ctl_name	= CTL_UNNUMBERED,
++		.procname	= "web100_fperms",
++		.data		= &sysctl_web100_fperms,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= &web100_proc_dointvec_update,
++	},
++	{
++		.ctl_name	= CTL_UNNUMBERED,
++		.procname	= "web100_gid",
++		.data		= &sysctl_web100_gid,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= &web100_proc_dointvec_update,
++	},
++#endif
+ 	{
+ 		.ctl_name	= CTL_UNNUMBERED,
+ 		.procname	= "udp_mem",
+diff --git a/net/ipv4/tcp.c b/net/ipv4/tcp.c
+index f1813bc..d02f2ef 100644
+--- a/net/ipv4/tcp.c
++++ b/net/ipv4/tcp.c
+@@ -288,6 +288,16 @@ EXPORT_SYMBOL(sysctl_tcp_mem);
+ EXPORT_SYMBOL(sysctl_tcp_rmem);
+ EXPORT_SYMBOL(sysctl_tcp_wmem);
+ 
++#ifdef CONFIG_WEB100_NET100
++int sysctl_WAD_IFQ = 0;
++int sysctl_WAD_MaxBurst = 3;
++EXPORT_SYMBOL(sysctl_WAD_MaxBurst);
++#endif
++#ifdef CONFIG_WEB100_STATS
++int sysctl_web100_fperms = CONFIG_WEB100_FPERMS;
++int sysctl_web100_gid = CONFIG_WEB100_GID;
++#endif
++
+ atomic_t tcp_memory_allocated;	/* Current allocated memory. */
+ EXPORT_SYMBOL(tcp_memory_allocated);
+ 
+@@ -834,8 +844,12 @@ new_segment:
+ wait_for_sndbuf:
+ 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+ wait_for_memory:
+-		if (copied)
++		if (copied) {
+ 			tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
++#ifdef CONFIG_WEB100_STATS
++			web100_update_writeq(sk);
++#endif
++		}
+ 
+ 		if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
+ 			goto do_error;
+@@ -1083,8 +1097,12 @@ new_segment:
+ wait_for_sndbuf:
+ 			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+ wait_for_memory:
+-			if (copied)
++			if (copied) {
+ 				tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
++#ifdef CONFIG_WEB100_STATS
++				web100_update_writeq(sk);
++#endif
++			}
+ 
+ 			if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
+ 				goto do_error;
+@@ -1451,6 +1469,9 @@ int tcp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 					*seq, TCP_SKB_CB(skb)->seq,
+ 					tp->rcv_nxt, flags);
+ 		}
++#ifdef CONFIG_WEB100_STATS
++		web100_update_recvq(sk);
++#endif
+ 
+ 		/* Well, if we have backlog, try to process it now yet. */
+ 
+@@ -1753,6 +1774,8 @@ void tcp_set_state(struct sock *sk, int state)
+ {
+ 	int oldstate = sk->sk_state;
+ 
++	WEB100_VAR_SET(tcp_sk(sk), State, web100_state(state));
++
+ 	switch (state) {
+ 	case TCP_ESTABLISHED:
+ 		if (oldstate != TCP_ESTABLISHED)
+@@ -2137,6 +2160,7 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
+ 		} else {
+ 			tp->nonagle &= ~TCP_NAGLE_OFF;
+ 		}
++		WEB100_VAR_SET(tp, NagleEnabled, !tp->nonagle);
+ 		break;
+ 
+ 	case TCP_CORK:
+@@ -2159,6 +2183,7 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
+ 				tp->nonagle |= TCP_NAGLE_PUSH;
+ 			tcp_push_pending_frames(sk);
+ 		}
++		WEB100_VAR_SET(tp, NagleEnabled, !tp->nonagle);
+ 		break;
+ 
+ 	case TCP_KEEPIDLE:
+@@ -2975,6 +3000,10 @@ void __init tcp_init(void)
+ 	       tcp_hashinfo.ehash_size, tcp_hashinfo.bhash_size);
+ 
+ 	tcp_register_congestion_control(&tcp_reno);
++	
++#ifdef CONFIG_WEB100_STATS
++	web100_stats_init();
++#endif
+ }
+ 
+ EXPORT_SYMBOL(tcp_close);
+diff --git a/net/ipv4/tcp_cong.c b/net/ipv4/tcp_cong.c
+index 6428b34..7eb0a24 100644
+--- a/net/ipv4/tcp_cong.c
++++ b/net/ipv4/tcp_cong.c
+@@ -316,7 +316,8 @@ void tcp_slow_start(struct tcp_sock *tp)
+ 		return;
+ 
+ 	if (sysctl_tcp_max_ssthresh > 0 && tp->snd_cwnd > sysctl_tcp_max_ssthresh)
+-		cnt = sysctl_tcp_max_ssthresh >> 1;	/* limited slow start */
++		/* limited slow start */
++		cnt = NET100_WAD(tp, WAD_MaxSsthresh, sysctl_tcp_max_ssthresh) >> 1;
+ 	else
+ 		cnt = tp->snd_cwnd;			/* exponential increase */
+ 
+@@ -364,8 +365,10 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 		return;
+ 
+ 	/* In "safe" area, increase. */
+-	if (tp->snd_cwnd <= tp->snd_ssthresh)
++        if (tp->snd_cwnd <= tp->snd_ssthresh) {
+ 		tcp_slow_start(tp);
++		WEB100_VAR_INC(tp, SlowStart);
++	}
+ 
+ 	/* In dangerous area, increase slowly. */
+ 	else if (sysctl_tcp_abc) {
+@@ -377,8 +380,10 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 			if (tp->snd_cwnd < tp->snd_cwnd_clamp)
+ 				tp->snd_cwnd++;
+ 		}
++		WEB100_VAR_INC(tp, CongAvoid);
+ 	} else {
+ 		tcp_cong_avoid_ai(tp, tp->snd_cwnd);
++		WEB100_VAR_INC(tp, CongAvoid);
+ 	}
+ }
+ EXPORT_SYMBOL_GPL(tcp_reno_cong_avoid);
+diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
+index d86784b..9687bdf 100644
+--- a/net/ipv4/tcp_input.c
++++ b/net/ipv4/tcp_input.c
+@@ -459,6 +459,7 @@ static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
+ 
+ 	if (tp->rcv_rtt_est.rtt != new_sample)
+ 		tp->rcv_rtt_est.rtt = new_sample;
++	WEB100_VAR_SET(tp, X_RcvRTT, ((1000000*tp->rcv_rtt_est.rtt)/HZ)>>3);
+ }
+ 
+ static inline void tcp_rcv_rtt_measure(struct tcp_sock *tp)
+@@ -595,6 +596,7 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
+ 
+ 	if (skb->len >= 128)
+ 		tcp_grow_window(sk, skb);
++	WEB100_UPDATE_FUNC(tp, web100_update_rcv_nxt(tp));
+ }
+ 
+ /* Called to compute a smoothed rtt estimate. The data fed to this
+@@ -841,6 +843,7 @@ void tcp_enter_cwr(struct sock *sk, const int set_ssthresh)
+ 
+ 		tcp_set_ca_state(sk, TCP_CA_CWR);
+ 	}
++	WEB100_UPDATE_FUNC(tp, web100_update_congestion(tp, 0));
+ }
+ 
+ /*
+@@ -884,6 +887,7 @@ static void tcp_init_metrics(struct sock *sk)
+ 	    tp->reordering != dst_metric(dst, RTAX_REORDERING)) {
+ 		tcp_disable_fack(tp);
+ 		tp->reordering = dst_metric(dst, RTAX_REORDERING);
++		WEB100_VAR_SET(tp, RetranThresh, tp->reordering);
+ 	}
+ 
+ 	if (dst_metric(dst, RTAX_RTT) == 0)
+@@ -944,6 +948,7 @@ static void tcp_update_reordering(struct sock *sk, const int metric,
+ 		int mib_idx;
+ 
+ 		tp->reordering = min(TCP_MAX_REORDERING, metric);
++		WEB100_VAR_SET(tp, RetranThresh, tp->reordering);
+ 
+ 		/* This exciting event is worth to be remembered. 8) */
+ 		if (ts)
+@@ -1731,6 +1736,9 @@ tcp_sacktag_write_queue(struct sock *sk, struct sk_buff *ack_skb,
+ 	state.flag = 0;
+ 	state.reord = tp->packets_out;
+ 
++	WEB100_VAR_INC(tp, SACKsRcvd);
++	WEB100_VAR_ADD(tp, SACKBlocksRcvd, num_sacks);
++
+ 	if (!tp->sacked_out) {
+ 		if (WARN_ON(tp->fackets_out))
+ 			tp->fackets_out = 0;
+@@ -2206,6 +2214,8 @@ void tcp_enter_loss(struct sock *sk, int how)
+ 	struct tcp_sock *tp = tcp_sk(sk);
+ 	struct sk_buff *skb;
+ 
++	WEB100_UPDATE_FUNC(tp, web100_update_congestion(tp, 0));
++
+ 	/* Reduce ssthresh if it has not yet been made inside this window. */
+ 	if (icsk->icsk_ca_state <= TCP_CA_Disorder || tp->snd_una == tp->high_seq ||
+ 	    (icsk->icsk_ca_state == TCP_CA_Loss && !icsk->icsk_retransmits)) {
+@@ -2251,6 +2261,7 @@ void tcp_enter_loss(struct sock *sk, int how)
+ 
+ 	tp->reordering = min_t(unsigned int, tp->reordering,
+ 			       sysctl_tcp_reordering);
++	WEB100_VAR_SET(tp, RetranThresh, tp->reordering);
+ 	tcp_set_ca_state(sk, TCP_CA_Loss);
+ 	tp->high_seq = tp->snd_nxt;
+ 	TCP_ECN_queue_cwr(tp);
+@@ -2568,8 +2579,19 @@ static void tcp_update_scoreboard(struct sock *sk, int fast_rexmit)
+  */
+ static inline void tcp_moderate_cwnd(struct tcp_sock *tp)
+ {
++#ifdef CONFIG_WEB100_STATS
++	{
++		u32 t = tcp_packets_in_flight(tp) + tcp_max_burst(tp);
++		if (t < tp->snd_cwnd) {
++			tp->snd_cwnd = t;
++			WEB100_VAR_INC(tp, OtherReductions);
++			WEB100_VAR_INC(tp, X_OtherReductionsCM);
++		}
++	};
++#else
+ 	tp->snd_cwnd = min(tp->snd_cwnd,
+ 			   tcp_packets_in_flight(tp) + tcp_max_burst(tp));
++#endif
+ 	tp->snd_cwnd_stamp = tcp_time_stamp;
+ }
+ 
+@@ -2665,6 +2687,7 @@ static void tcp_undo_cwr(struct sock *sk, const int undo)
+ 	}
+ 	tcp_moderate_cwnd(tp);
+ 	tp->snd_cwnd_stamp = tcp_time_stamp;
++	WEB100_VAR_INC(tp, CongestionOverCount);	/* XXX This is wrong. -JWH */
+ }
+ 
+ static inline int tcp_may_undo(struct tcp_sock *tp)
+@@ -3057,6 +3080,8 @@ static void tcp_fastretrans_alert(struct sock *sk, int pkts_acked, int flag)
+ 		tp->snd_cwnd_cnt = 0;
+ 		tcp_set_ca_state(sk, TCP_CA_Recovery);
+ 		fast_rexmit = 1;
++		WEB100_UPDATE_FUNC(tp, web100_update_congestion(tp, 0));
++		WEB100_VAR_INC(tp, FastRetran);	/* WEB100_XXX */
+ 	}
+ 
+ 	if (do_lost || (tcp_is_fack(tp) && tcp_head_timedout(sk)))
+@@ -3070,6 +3095,7 @@ static void tcp_valid_rtt_meas(struct sock *sk, u32 seq_rtt)
+ 	tcp_rtt_estimator(sk, seq_rtt);
+ 	tcp_set_rto(sk);
+ 	inet_csk(sk)->icsk_backoff = 0;
++	WEB100_UPDATE_FUNC(tcp_sk(sk), web100_update_rtt(sk, seq_rtt));
+ }
+ 
+ /* Read draft-ietf-tcplw-high-performance before mucking
+@@ -3128,6 +3154,27 @@ static inline void tcp_ack_update_rtt(struct sock *sk, const int flag,
+ static void tcp_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ {
+ 	const struct inet_connection_sock *icsk = inet_csk(sk);
++#ifdef CONFIG_WEB100_STATS
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct web100stats *stats = tp->tcp_stats;
++	struct web100directs *vars = &stats->wc_vars;
++	
++	if (tp->snd_cwnd > tp->snd_cwnd_clamp) {
++		tp->snd_cwnd--;
++		return;
++	}
++	
++#ifdef CONFIG_WEB100_NET100
++	if (vars->WAD_NoAI) {
++		tp->snd_cwnd += vars->WAD_CwndAdjust;
++		vars->WAD_CwndAdjust = 0;
++		tp->snd_cwnd_stamp = tcp_time_stamp;
++		tp->snd_cwnd = min(tp->snd_cwnd, (__u32)tp->snd_cwnd_clamp);
++		return;
++	}
++#endif
++#endif	
++	
+ 	icsk->icsk_ca_ops->cong_avoid(sk, ack, in_flight);
+ 	tcp_sk(sk)->snd_cwnd_stamp = tcp_time_stamp;
+ }
+@@ -3416,10 +3463,12 @@ static int tcp_ack_update_window(struct sock *sk, struct sk_buff *skb, u32 ack,
+ 				tp->max_window = nwin;
+ 				tcp_sync_mss(sk, inet_csk(sk)->icsk_pmtu_cookie);
+ 			}
++			WEB100_UPDATE_FUNC(tp, web100_update_rwin_rcvd(tp));
+ 		}
+ 	}
+ 
+ 	tp->snd_una = ack;
++	WEB100_UPDATE_FUNC(tp, web100_update_snd_una(tp));
+ 
+ 	return flag;
+ }
+@@ -3611,6 +3660,7 @@ static int tcp_ack(struct sock *sk, struct sk_buff *skb, int flag)
+ 		 */
+ 		tcp_update_wl(tp, ack_seq);
+ 		tp->snd_una = ack;
++		WEB100_UPDATE_FUNC(tp, web100_update_snd_una(tp));
+ 		flag |= FLAG_WIN_UPDATE;
+ 
+ 		tcp_ca_event(sk, CA_EVENT_FAST_ACK);
+@@ -3627,8 +3677,10 @@ static int tcp_ack(struct sock *sk, struct sk_buff *skb, int flag)
+ 		if (TCP_SKB_CB(skb)->sacked)
+ 			flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una);
+ 
+-		if (TCP_ECN_rcv_ecn_echo(tp, tcp_hdr(skb)))
++		if (TCP_ECN_rcv_ecn_echo(tp, tcp_hdr(skb))) {
+ 			flag |= FLAG_ECE;
++			WEB100_VAR_INC(tp, ECERcvd);
++		}
+ 
+ 		tcp_ca_event(sk, CA_EVENT_SLOW_ACK);
+ 	}
+@@ -4106,6 +4158,8 @@ static void tcp_send_dupack(struct sock *sk, struct sk_buff *skb)
+ {
+ 	struct tcp_sock *tp = tcp_sk(sk);
+ 
++	WEB100_VAR_INC(tp, DupAcksOut);
++
+ 	if (TCP_SKB_CB(skb)->end_seq != TCP_SKB_CB(skb)->seq &&
+ 	    before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
+ 		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_DELAYEDACKLOST);
+@@ -4359,6 +4413,10 @@ queue_and_out:
+ 
+ 		tcp_fast_path_check(sk);
+ 
++#ifdef CONFIG_WEB100_STATS
++		web100_update_recvq(sk);
++#endif
++
+ 		if (eaten > 0)
+ 			__kfree_skb(skb);
+ 		else if (!sock_flag(sk, SOCK_DEAD))
+@@ -4413,6 +4471,9 @@ drop:
+ 	SOCK_DEBUG(sk, "out of order segment: rcv_next %X seq %X - %X\n",
+ 		   tp->rcv_nxt, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
+ 
++#ifdef CONFIG_WEB100_STATS
++	web100_update_recvq(sk);
++#endif
+ 	skb_set_owner_r(skb, sk);
+ 
+ 	if (!skb_peek(&tp->out_of_order_queue)) {
+@@ -4766,6 +4827,8 @@ void tcp_cwnd_application_limited(struct sock *sk)
+ 		if (win_used < tp->snd_cwnd) {
+ 			tp->snd_ssthresh = tcp_current_ssthresh(sk);
+ 			tp->snd_cwnd = (tp->snd_cwnd + win_used) >> 1;
++			WEB100_VAR_INC(tp, OtherReductions);
++			WEB100_VAR_INC(tp, X_OtherReductionsCV);
+ 		}
+ 		tp->snd_cwnd_used = 0;
+ 	}
+@@ -5296,6 +5359,9 @@ int tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
+ 				tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+ 			}
+ 
++#ifdef CONFIG_WEB100_STATS
++			web100_update_recvq(sk);
++#endif
+ 			tcp_event_data_recv(sk, skb);
+ 
+ 			if (TCP_SKB_CB(skb)->ack_seq != tp->snd_una) {
+@@ -5464,6 +5530,9 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
+ 		tp->copied_seq = tp->rcv_nxt;
+ 		smp_mb();
+ 		tcp_set_state(sk, TCP_ESTABLISHED);
++#ifdef CONFIG_WEB100_STATS
++		web100_stats_establish(sk);
++#endif
+ 
+ 		security_inet_conn_established(sk, skb);
+ 
+@@ -5682,6 +5751,9 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 				smp_mb();
+ 				tcp_set_state(sk, TCP_ESTABLISHED);
+ 				sk->sk_state_change(sk);
++#ifdef CONFIG_WEB100_STATS
++				web100_stats_establish(sk);
++#endif
+ 
+ 				/* Note, that this wakeup is only for marginal
+ 				 * crossed SYN case. Passively open sockets
+diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
+index 7cda24b..5298976 100644
+--- a/net/ipv4/tcp_ipv4.c
++++ b/net/ipv4/tcp_ipv4.c
+@@ -243,6 +243,10 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+ 							   inet->daddr,
+ 							   inet->sport,
+ 							   usin->sin_port);
++	WEB100_VAR_SET(tp, SndISS, tp->write_seq);
++	WEB100_VAR_SET(tp, SndMax, tp->write_seq);
++	WEB100_VAR_SET(tp, SndNxt, tp->write_seq);
++	WEB100_VAR_SET(tp, SndUna, tp->write_seq);
+ 
+ 	inet->id = tp->write_seq ^ jiffies;
+ 
+@@ -381,6 +385,7 @@ void tcp_v4_err(struct sk_buff *icmp_skb, u32 info)
+ 
+ 	switch (type) {
+ 	case ICMP_SOURCE_QUENCH:
++		WEB100_VAR_INC(tp, QuenchRcvd);
+ 		/* Just silently ignore these. */
+ 		goto out;
+ 	case ICMP_PARAMETERPROB:
+@@ -1373,6 +1378,13 @@ struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
+ 	newsk = tcp_create_openreq_child(sk, req, skb);
+ 	if (!newsk)
+ 		goto exit;
++#ifdef CONFIG_WEB100_STATS
++	if (web100_stats_create(newsk)) {
++		sk_free(newsk);
++		goto exit;
++	}
++	tcp_sk(newsk)->tcp_stats->wc_vars.LocalAddressType = WC_ADDRTYPE_IPV4;
++#endif
+ 
+ 	newsk->sk_gso_type = SKB_GSO_TCPV4;
+ 	sk_setup_caps(newsk, dst);
+@@ -1620,6 +1632,7 @@ process:
+ 	skb->dev = NULL;
+ 
+ 	bh_lock_sock_nested(sk);
++	WEB100_UPDATE_FUNC(tcp_sk(sk), web100_update_segrecv(tcp_sk(sk), skb));
+ 	ret = 0;
+ 	if (!sock_owned_by_user(sk)) {
+ #ifdef CONFIG_NET_DMA
+@@ -1636,6 +1649,7 @@ process:
+ 		}
+ 	} else
+ 		sk_add_backlog(sk, skb);
++	WEB100_UPDATE_FUNC(tcp_sk(sk), web100_update_cwnd(tcp_sk(sk)));
+ 	bh_unlock_sock(sk);
+ 
+ 	sock_put(sk);
+@@ -1829,6 +1843,16 @@ static int tcp_v4_init_sock(struct sock *sk)
+ 	sk->sk_sndbuf = sysctl_tcp_wmem[1];
+ 	sk->sk_rcvbuf = sysctl_tcp_rmem[1];
+ 
++#ifdef CONFIG_WEB100_STATS
++	{
++		int err;
++		if ((err = web100_stats_create(sk))) {
++			return err;
++		}
++		tcp_sk(sk)->tcp_stats->wc_vars.LocalAddressType = WC_ADDRTYPE_IPV4;
++	}
++#endif
++
+ 	local_bh_disable();
+ 	percpu_counter_inc(&tcp_sockets_allocated);
+ 	local_bh_enable();
+@@ -1871,6 +1895,10 @@ void tcp_v4_destroy_sock(struct sock *sk)
+ 	if (inet_csk(sk)->icsk_bind_hash)
+ 		inet_put_port(sk);
+ 
++#ifdef CONFIG_WEB100_STATS
++	web100_stats_destroy(tcp_sk(sk)->tcp_stats);
++#endif
++
+ 	/*
+ 	 * If sendmsg cached page exists, toss it.
+ 	 */
+diff --git a/net/ipv4/tcp_minisocks.c b/net/ipv4/tcp_minisocks.c
+index 4c03598..ab13402 100644
+--- a/net/ipv4/tcp_minisocks.c
++++ b/net/ipv4/tcp_minisocks.c
+@@ -328,6 +328,8 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
+ 		} while (0);
+ #endif
+ 
++		WEB100_VAR_SET(tp, State, WC_STATE_TIMEWAIT);
++		
+ 		/* Linkage updates. */
+ 		__inet_twsk_hashdance(tw, sk, &tcp_hashinfo);
+ 
+diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
+index fcd278a..0d57d6e 100644
+--- a/net/ipv4/tcp_output.c
++++ b/net/ipv4/tcp_output.c
+@@ -67,6 +67,7 @@ static void tcp_event_new_data_sent(struct sock *sk, struct sk_buff *skb)
+ 
+ 	tcp_advance_send_head(sk, skb);
+ 	tp->snd_nxt = TCP_SKB_CB(skb)->end_seq;
++	WEB100_UPDATE_FUNC(tp, web100_update_snd_nxt(tp));
+ 
+ 	/* Don't override Nagle indefinately with F-RTO */
+ 	if (tp->frto_counter == 2)
+@@ -260,6 +261,7 @@ static u16 tcp_select_window(struct sock *sk)
+ 	}
+ 	tp->rcv_wnd = new_win;
+ 	tp->rcv_wup = tp->rcv_nxt;
++	WEB100_UPDATE_FUNC(tp, web100_update_rwin_sent(tp));
+ 
+ 	/* Make sure we do not exceed the maximum possible
+ 	 * scaled window.
+@@ -714,11 +716,32 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
+ 	if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq)
+ 		TCP_INC_STATS(sock_net(sk), TCP_MIB_OUTSEGS);
+ 
++#ifdef CONFIG_WEB100_STATS
++	{
++		/* If the skb isn't cloned, we can't reference it after
++		 * calling queue_xmit, so copy everything we need here. */
++		int len = skb->len;
++		int pcount = tcp_skb_pcount(skb);
++		__u32 seq = TCP_SKB_CB(skb)->seq;
++		__u32 end_seq = TCP_SKB_CB(skb)->end_seq;
++		int flags = TCP_SKB_CB(skb)->flags;
++		
++		err = icsk->icsk_af_ops->queue_xmit(skb, 0);
++		if (likely(err == 0))
++			WEB100_UPDATE_FUNC(tp, web100_update_segsend(sk, len, pcount,
++			                       seq, end_seq, flags));
++	}
++#else
+ 	err = icsk->icsk_af_ops->queue_xmit(skb, 0);
++#endif
+ 	if (likely(err <= 0))
+ 		return err;
+ 
++#ifdef CONFIG_WEB100_NET100
++	if (!NET100_WAD(tp, WAD_IFQ, sysctl_WAD_IFQ))
++#endif
+ 	tcp_enter_cwr(sk, 1);
++	WEB100_VAR_INC(tp, SendStall);
+ 
+ 	return net_xmit_eval(err);
+ }
+@@ -1053,6 +1076,7 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
+ 	if (icsk->icsk_mtup.enabled)
+ 		mss_now = min(mss_now, tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_low));
+ 	tp->mss_cache = mss_now;
++	WEB100_UPDATE_FUNC(tp, web100_update_mss(tp));
+ 
+ 	return mss_now;
+ }
+@@ -1247,20 +1271,22 @@ static inline int tcp_snd_wnd_test(struct tcp_sock *tp, struct sk_buff *skb,
+  * should be put on the wire right now.  If so, it returns the number of
+  * packets allowed by the congestion window.
+  */
+-static unsigned int tcp_snd_test(struct sock *sk, struct sk_buff *skb,
++static int tcp_snd_wait(struct sock *sk, struct sk_buff *skb,
+ 				 unsigned int cur_mss, int nonagle)
+ {
+ 	struct tcp_sock *tp = tcp_sk(sk);
+-	unsigned int cwnd_quota;
++	int cwnd_quota;
+ 
+ 	tcp_init_tso_segs(sk, skb, cur_mss);
+ 
+ 	if (!tcp_nagle_test(tp, skb, cur_mss, nonagle))
+-		return 0;
++		return -WC_SNDLIM_SENDER;
+ 
+ 	cwnd_quota = tcp_cwnd_test(tp, skb);
+-	if (cwnd_quota && !tcp_snd_wnd_test(tp, skb, cur_mss))
+-		cwnd_quota = 0;
++	if (!cwnd_quota)
++		return -WC_SNDLIM_CWND;
++	if (!tcp_snd_wnd_test(tp, skb, cur_mss))
++		return -WC_SNDLIM_RWIN;
+ 
+ 	return cwnd_quota;
+ }
+@@ -1272,9 +1298,9 @@ int tcp_may_send_now(struct sock *sk)
+ 	struct sk_buff *skb = tcp_send_head(sk);
+ 
+ 	return (skb &&
+-		tcp_snd_test(sk, skb, tcp_current_mss(sk),
++		tcp_snd_wait(sk, skb, tcp_current_mss(sk),
+ 			     (tcp_skb_is_last(sk, skb) ?
+-			      tp->nonagle : TCP_NAGLE_PUSH)));
++			      tp->nonagle : TCP_NAGLE_PUSH)) > 0);
+ }
+ 
+ /* Trim TSO SKB to LEN bytes, put the remaining data into a new packet
+@@ -1551,6 +1577,7 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 	unsigned int tso_segs, sent_pkts;
+ 	int cwnd_quota;
+ 	int result;
++	int why = WC_SNDLIM_NONE;
+ 
+ 	sent_pkts = 0;
+ 
+@@ -1571,20 +1598,29 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 		BUG_ON(!tso_segs);
+ 
+ 		cwnd_quota = tcp_cwnd_test(tp, skb);
+-		if (!cwnd_quota)
++		if (!cwnd_quota) {
++			why = WC_SNDLIM_CWND;
+ 			break;
++		}
+ 
+-		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now)))
++		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now))) {
++			why = WC_SNDLIM_RWIN;
+ 			break;
++		}
+ 
+ 		if (tso_segs == 1) {
+ 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
+ 						     (tcp_skb_is_last(sk, skb) ?
+-						      nonagle : TCP_NAGLE_PUSH))))
++						      nonagle : TCP_NAGLE_PUSH)))) {
++				why = WC_SNDLIM_SENDER;
+ 				break;
++			}
+ 		} else {
+-			if (!push_one && tcp_tso_should_defer(sk, skb))
++			if (!push_one && tcp_tso_should_defer(sk, skb)) {
++				/* XXX: is this sender or cwnd? */
++				why = WC_SNDLIM_SENDER;
+ 				break;
++			}
+ 		}
+ 
+ 		limit = mss_now;
+@@ -1598,8 +1634,10 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 
+ 		TCP_SKB_CB(skb)->when = tcp_time_stamp;
+ 
+-		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
++		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp))) {
++			why = WC_SNDLIM_SENDER;
+ 			break;
++		}
+ 
+ 		/* Advance the send_head.  This one is sent out.
+ 		 * This call will increment packets_out.
+@@ -1612,6 +1650,9 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 		if (push_one)
+ 			break;
+ 	}
++	if (why == WC_SNDLIM_NONE)
++		why = WC_SNDLIM_SENDER;
++	WEB100_UPDATE_FUNC(tp, web100_update_sndlim(tp, why));
+ 
+ 	if (likely(sent_pkts)) {
+ 		tcp_cwnd_validate(sk);
+@@ -1769,6 +1810,9 @@ u32 __tcp_select_window(struct sock *sk)
+ 			window = free_space;
+ 	}
+ 
++	WEB100_VAR_SET(tp, X_dbg3, free_space);
++	WEB100_VAR_SET(tp, X_dbg2, mss);
++	WEB100_VAR_SET(tp, X_dbg1, window);
+ 	return window;
+ }
+ 
+@@ -2352,6 +2396,7 @@ static void tcp_connect_init(struct sock *sk)
+ 	tp->snd_wnd = 0;
+ 	tcp_init_wl(tp, 0);
+ 	tp->snd_una = tp->write_seq;
++	WEB100_VAR_SET(tp, SndUna, tp->snd_una);
+ 	tp->snd_sml = tp->write_seq;
+ 	tp->snd_up = tp->write_seq;
+ 	tp->rcv_nxt = 0;
+@@ -2396,6 +2441,7 @@ int tcp_connect(struct sock *sk)
+ 	 * in order to make this packet get counted in tcpOutSegs.
+ 	 */
+ 	tp->snd_nxt = tp->write_seq;
++	WEB100_UPDATE_FUNC(tp, web100_update_snd_nxt(tp));
+ 	tp->pushed_seq = tp->write_seq;
+ 	TCP_INC_STATS(sock_net(sk), TCP_MIB_ACTIVEOPENS);
+ 
+diff --git a/net/ipv4/tcp_timer.c b/net/ipv4/tcp_timer.c
+index cdb2ca7..2541ed1 100644
+--- a/net/ipv4/tcp_timer.c
++++ b/net/ipv4/tcp_timer.c
+@@ -348,6 +348,7 @@ void tcp_retransmit_timer(struct sock *sk)
+ 		}
+ 		NET_INC_STATS_BH(sock_net(sk), mib_idx);
+ 	}
++	WEB100_UPDATE_FUNC(tp, web100_update_timeout(sk));
+ 
+ 	if (tcp_use_frto(sk)) {
+ 		tcp_enter_frto(sk);
+@@ -383,6 +384,7 @@ void tcp_retransmit_timer(struct sock *sk)
+ 	 * the 120 second clamps though!
+ 	 */
+ 	icsk->icsk_backoff++;
++	WEB100_VAR_SET(tcp_sk(sk), CurTimeoutCount, icsk->icsk_backoff);
+ 	icsk->icsk_retransmits++;
+ 
+ out_reset_timer:
+diff --git a/net/ipv4/web100_stats.c b/net/ipv4/web100_stats.c
+new file mode 100644
+index 0000000..bc686e8
+--- /dev/null
++++ b/net/ipv4/web100_stats.c
+@@ -0,0 +1,704 @@
++/*	
++ * net/ipv4/web100_stats.c
++ *
++ * Copyright (C) 2001 Matt Mathis <mathis@psc.edu>
++ * Copyright (C) 2001 John Heffner <jheffner@psc.edu>
++ * Copyright (C) 2000 Jeffrey Semke <semke@psc.edu>
++ *
++ * The Web 100 project.  See http://www.web100.org
++ *
++ *	Functions for creating, destroying, and updating the Web100
++ *	statistics structure.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++#include <linux/types.h>
++#include <linux/bootmem.h>
++#include <linux/socket.h>
++#include <net/web100.h>
++#include <net/tcp.h>
++#include <linux/string.h>
++#include <linux/proc_fs.h>
++#include <asm/atomic.h>
++
++#define WC_INF32	0xffffffff
++
++#define WC_DEATH_SLOTS	8
++#define WC_PERSIST_TIME	60
++
++/* BEWARE: The release process updates the version string */
++char *web100_version_string = "2.5.27 201001301335"
++#ifdef CONFIG_WEB100_NET100
++    " net100"
++#endif
++    ;
++
++static void death_cleanup(unsigned long dummy);
++
++/* Global stats reader-writer lock */
++rwlock_t web100_linkage_lock = RW_LOCK_UNLOCKED;
++
++/* Data structures for tying together stats */
++static int web100stats_next_cid;
++static int web100stats_conn_num;
++static int web100stats_htsize;
++struct web100stats **web100stats_ht;
++struct web100stats *web100stats_first = NULL;
++
++static struct web100stats *death_slots[WC_DEATH_SLOTS];
++static int cur_death_slot;
++static spinlock_t death_lock = SPIN_LOCK_UNLOCKED;
++static struct timer_list stats_persist_timer = TIMER_INITIALIZER(death_cleanup, 0, 0);
++static int ndeaths;
++
++#ifdef CONFIG_WEB100_NETLINK
++static struct sock *web100_nlsock;
++#endif
++
++extern struct proc_dir_entry *proc_web100_dir;
++
++
++/*
++ * Structural maintainance
++ */
++
++static inline int web100stats_hash(int cid)
++{
++	return cid % web100stats_htsize;
++}
++
++struct web100stats *web100stats_lookup(int cid)
++{
++	struct web100stats *stats;
++	
++	/* Let's ensure safety here.  It's not too expensive and may change. */
++	if (cid < 0 || cid >= WEB100_MAX_CONNS)
++		return NULL;
++	
++	stats = web100stats_ht[web100stats_hash(cid)];
++	while (stats && stats->wc_cid != cid)
++		stats = stats->wc_hash_next;
++	return stats;
++}
++
++/* This will get really slow as the cid space fills.  This can be done
++ * better, but it's just not worth it right now.
++ * The caller must hold the lock.
++ */
++static int get_next_cid(void)
++{
++	int i;
++	
++	if (web100stats_conn_num >= WEB100_MAX_CONNS)
++		return -1;
++	
++	i = web100stats_next_cid;
++	do {
++		if (web100stats_lookup(i) == NULL)
++			break;
++		i = (i + 1) % WEB100_MAX_CONNS;
++	} while (i != web100stats_next_cid);
++	web100stats_next_cid = (i + 1) % WEB100_MAX_CONNS;
++	
++	return i;
++}
++
++static void stats_link(struct web100stats *stats)
++{
++	int hash;
++	
++	write_lock_bh(&web100_linkage_lock);
++	
++	if ((stats->wc_cid = get_next_cid()) < 0) {
++		write_unlock_bh(&web100_linkage_lock);
++		return;
++	}
++	
++	hash = web100stats_hash(stats->wc_cid);
++	stats->wc_hash_next = web100stats_ht[hash];
++	stats->wc_hash_prev = NULL;
++	if (web100stats_ht[hash])
++		web100stats_ht[hash]->wc_hash_prev = stats;
++	web100stats_ht[hash] = stats;
++	
++	stats->wc_next = web100stats_first;
++	stats->wc_prev = NULL;
++	if (web100stats_first)
++		web100stats_first->wc_prev = stats;
++	web100stats_first = stats;
++	
++	web100stats_conn_num++;
++	proc_web100_dir->nlink = web100stats_conn_num + 2;
++	
++	write_unlock_bh(&web100_linkage_lock);
++}
++
++static void stats_unlink(struct web100stats *stats)
++{
++	int hash;
++	
++	write_lock_bh(&web100_linkage_lock);
++	
++	hash = web100stats_hash(stats->wc_cid);
++	if (stats->wc_hash_next)
++		stats->wc_hash_next->wc_hash_prev = stats->wc_hash_prev;
++	if (stats->wc_hash_prev)
++		stats->wc_hash_prev->wc_hash_next = stats->wc_hash_next;
++	if (stats == web100stats_ht[hash])
++		web100stats_ht[hash] = stats->wc_hash_next ?
++					stats->wc_hash_next :
++					stats->wc_hash_prev;
++	
++	if (stats->wc_next)
++		stats->wc_next->wc_prev = stats->wc_prev;
++	if (stats->wc_prev)
++		stats->wc_prev->wc_next = stats->wc_next;
++	if (stats == web100stats_first)
++		web100stats_first = stats->wc_next ? stats->wc_next :
++						      stats->wc_prev;
++	
++	web100stats_conn_num--;
++	proc_web100_dir->nlink = web100stats_conn_num + 2;
++	
++	write_unlock_bh(&web100_linkage_lock);
++}
++
++static void stats_persist(struct web100stats *stats)
++{
++	spin_lock_bh(&death_lock);
++	
++	stats->wc_death_next = death_slots[cur_death_slot];
++	death_slots[cur_death_slot] = stats;
++	if (ndeaths <= 0) {
++		stats_persist_timer.expires = jiffies + WC_PERSIST_TIME * HZ / WC_DEATH_SLOTS;
++		add_timer(&stats_persist_timer);
++	}
++	ndeaths++;
++	
++	spin_unlock_bh(&death_lock);
++}
++
++static void death_cleanup(unsigned long dummy)
++{
++	struct web100stats *stats, *next;
++	
++	spin_lock_bh(&death_lock);
++	
++	cur_death_slot = (cur_death_slot + 1) % WC_DEATH_SLOTS;
++	stats = death_slots[cur_death_slot];
++	while (stats) {
++		stats->wc_dead = 1;
++		ndeaths--;
++		next = stats->wc_death_next;
++		web100_stats_unuse(stats);
++		stats = next;
++	}
++	death_slots[cur_death_slot] = NULL;
++
++	if (ndeaths > 0) {
++		stats_persist_timer.expires = jiffies + WC_PERSIST_TIME * HZ / WC_DEATH_SLOTS;
++		add_timer(&stats_persist_timer);
++	}
++	
++	spin_unlock_bh(&death_lock);
++}
++
++
++/* Tom Dunigan's (slightly modified) netlink code.  Notifies listening apps
++ * of Web100 events.
++ *
++ * NOTE: we are currently squatting on netlink family 10 (NETLINK_WEB100) in
++ * include/linux/netlink.h
++ */
++
++#ifdef CONFIG_WEB100_NETLINK
++void web100_netlink_event(int type, int cid)
++{
++	struct web100_netlink_msg *msg;
++	struct sk_buff *tmpskb;
++	
++	if (web100_nlsock == NULL)
++		return;
++	
++	if ((tmpskb = alloc_skb((sizeof (struct web100_netlink_msg)), GFP_ATOMIC)) == NULL) {
++		printk(KERN_INFO "web100_netlink_event: alloc_skb failure\n");
++		return;
++	}
++	
++	skb_put(tmpskb, sizeof (struct web100_netlink_msg));
++	msg = (struct web100_netlink_msg *)tmpskb->data;
++	msg->type = type;
++	msg->cid = cid;
++	netlink_broadcast(web100_nlsock, tmpskb, 0, ~0, GFP_ATOMIC);
++}
++#endif /* CONFIG_WEB100_NETLINK */
++
++extern __u32 sysctl_wmem_default;
++extern __u32 sysctl_rmem_default;
++
++/* Called whenever a TCP/IPv4 sock is created.
++ * net/ipv4/tcp_ipv4.c: tcp_v4_syn_recv_sock,
++ *			tcp_v4_init_sock
++ * Allocates a stats structure and initializes values.
++ */
++int web100_stats_create(struct sock *sk)
++{
++	struct web100stats *stats;
++	struct web100directs *vars;
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct timeval tv;
++	
++	if ((stats = kmalloc(sizeof (struct web100stats), gfp_any())) == NULL)
++		return -ENOMEM;
++	tp->tcp_stats = stats;
++	vars = &stats->wc_vars;
++	
++	memset(stats, 0, sizeof (struct web100stats));
++	
++	stats->wc_cid = -1;
++	stats->wc_sk = sk;
++	atomic_set(&stats->wc_users, 0);
++	
++	stats->wc_limstate = WC_SNDLIM_STARTUP;
++	stats->wc_limstate_time = web100_mono_time();
++	
++	vars->NagleEnabled = !(tp->nonagle);
++	vars->ActiveOpen = !in_interrupt();
++	
++	vars->SndUna = tp->snd_una;
++	vars->SndNxt = tp->snd_nxt;
++	vars->SndMax = tp->snd_nxt;
++	vars->SndISS = tp->snd_nxt;
++	
++	do_gettimeofday(&tv);
++	vars->StartTime = tv.tv_sec * 10 + tv.tv_usec / 100000;
++	vars->StartTimeSec = tv.tv_sec;
++	vars->StartTimeUsec = tv.tv_usec;
++	stats->wc_start_monotime = web100_mono_time();
++	
++	vars->MinRTT = vars->MinRTO = vars->MinMSS = vars->MinRwinRcvd =
++		vars->MinRwinSent = vars->MinSsthresh = WC_INF32;
++	
++	vars->LimRwin = tp->window_clamp;
++	
++	sock_hold(sk);
++	web100_stats_use(stats);
++	
++	return 0;
++}
++
++void web100_stats_destroy(struct web100stats *stats)
++{
++	/* Attribute final sndlim time. */
++	web100_update_sndlim(tcp_sk(stats->wc_sk), stats->wc_limstate);
++	
++	if (stats->wc_cid >= 0) {
++#ifdef CONFIG_WEB100_NETLINK
++		web100_netlink_event(WC_NL_TYPE_DISCONNECT, stats->wc_cid);
++#endif
++		stats_persist(stats);
++	} else {
++		web100_stats_unuse(stats);
++	}
++}
++
++/* Do not call directly.  Called from web100_stats_unuse(). */
++void web100_stats_free(struct web100stats *stats)
++{
++	if (stats->wc_cid >= 0) {
++		stats_unlink(stats);
++	}
++	sock_put(stats->wc_sk);
++	kfree(stats);
++}
++
++extern __u32 sysctl_wmem_default;
++extern __u32 sysctl_rmem_default;
++
++/* Called when a connection enters the ESTABLISHED state, and has all its
++ * state initialized.
++ * net/ipv4/tcp_input.c: tcp_rcv_state_process,
++ *			 tcp_rcv_synsent_state_process
++ * Here we link the statistics structure in so it is visible in the /proc
++ * fs, and do some final init.
++ */
++void web100_stats_establish(struct sock *sk)
++{
++	struct inet_sock *inet = inet_sk(sk);
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct web100stats *stats = tp->tcp_stats;
++	struct web100directs *vars = &stats->wc_vars;
++	
++	if (stats == NULL)
++		return;
++	
++	/* Let's set these here, since they can't change once the
++	 * connection is established.
++	 */
++	vars->LocalPort = inet->num;
++	vars->RemPort = ntohs(inet->dport);
++	
++	if (vars->LocalAddressType == WC_ADDRTYPE_IPV4) {
++		vars->LocalAddress.v4addr = inet->rcv_saddr;
++		vars->RemAddress.v4addr = inet->daddr;
++	}
++#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
++	else if (vars->LocalAddressType == WC_ADDRTYPE_IPV6) {
++		memcpy(&vars->LocalAddress.v6addr.addr, &(inet6_sk(sk)->saddr), 16);
++		memcpy(&vars->RemAddress.v6addr.addr, &(inet6_sk(sk)->daddr), 16);
++	}
++#endif
++	else {
++		printk(KERN_ERR "Web100: LocalAddressType not valid.\n");
++	}
++	vars->LocalAddress.v6addr.type = vars->RemAddress.v6addr.type = vars->LocalAddressType;
++	
++	vars->SACKEnabled = tp->rx_opt.sack_ok;
++	vars->TimestampsEnabled = tp->rx_opt.tstamp_ok;
++#ifdef CONFIG_INET_ECN
++	vars->ECNEnabled = tp->ecn_flags & TCP_ECN_OK;
++#endif
++	
++	if (tp->rx_opt.wscale_ok) {
++		vars->WinScaleRcvd = tp->rx_opt.snd_wscale;
++		vars->WinScaleSent = tp->rx_opt.rcv_wscale;
++	} else {
++		vars->WinScaleRcvd = -1;
++		vars->WinScaleSent = -1;
++	}
++	vars->SndWinScale = vars->WinScaleRcvd;
++	vars->RcvWinScale = vars->WinScaleSent;
++	
++	vars->CurCwnd = tp->snd_cwnd * tp->mss_cache;
++	vars->CurSsthresh = tp->snd_ssthresh * tp->mss_cache;
++	web100_update_cwnd(tp);
++	web100_update_rwin_rcvd(tp);
++	web100_update_rwin_sent(tp);
++	
++	vars->RecvISS = vars->RcvNxt = tp->rcv_nxt;
++	
++	vars->RetranThresh = tp->reordering;
++	
++	vars->LimRwin = min_t(__u32, vars->LimRwin, 65355U << tp->rx_opt.rcv_wscale);
++	
++	stats_link(stats);
++	
++	web100_update_sndlim(tp, WC_SNDLIM_SENDER);
++	
++#ifdef CONFIG_WEB100_NETLINK
++	web100_netlink_event(WC_NL_TYPE_CONNECT, stats->wc_cid);
++#endif
++}
++
++/*
++ * Statistics update functions
++ */
++
++void web100_update_snd_nxt(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	
++	if (after(tp->snd_nxt, stats->wc_vars.SndMax)) {
++		if (before(stats->wc_vars.SndMax, stats->wc_vars.SndISS) &&
++		    after(tp->snd_nxt, stats->wc_vars.SndISS))
++			stats->wc_vars.SendWraps++;
++		stats->wc_vars.SndMax = tp->snd_nxt;
++	}
++	stats->wc_vars.SndNxt = tp->snd_nxt;
++}
++
++void web100_update_snd_una(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	
++	stats->wc_vars.ThruBytesAcked += (__u32)(tp->snd_una - stats->wc_vars.SndUna);
++	stats->wc_vars.SndUna = tp->snd_una;
++}
++
++void web100_update_rtt(struct sock *sk, unsigned long rtt_sample)
++{
++	struct web100stats *stats = tcp_sk(sk)->tcp_stats;
++        unsigned long rtt_sample_msec = rtt_sample * 1000 / HZ;
++        __u32 rto;
++	
++	stats->wc_vars.SampleRTT = rtt_sample_msec;
++
++	if (rtt_sample_msec > stats->wc_vars.MaxRTT)
++	        stats->wc_vars.MaxRTT = rtt_sample_msec;
++	if (rtt_sample_msec < stats->wc_vars.MinRTT)
++		stats->wc_vars.MinRTT = rtt_sample_msec;
++	
++	stats->wc_vars.CountRTT++;
++	stats->wc_vars.SumRTT += rtt_sample_msec;
++
++	if (stats->wc_vars.PreCongCountRTT != stats->wc_vars.PostCongCountRTT) {
++		stats->wc_vars.PostCongCountRTT++;
++		stats->wc_vars.PostCongSumRTT += rtt_sample_msec;
++	}
++	
++	/* srtt is stored as 8 * the smoothed estimate */
++	stats->wc_vars.SmoothedRTT =
++		(tcp_sk(sk)->srtt >> 3) * 1000 / HZ;
++	
++	rto = inet_csk(sk)->icsk_rto * 1000 / HZ;
++	if (rto > stats->wc_vars.MaxRTO)
++		stats->wc_vars.MaxRTO = rto;
++	if (rto < stats->wc_vars.MinRTO)
++		stats->wc_vars.MinRTO = rto;
++	stats->wc_vars.CurRTO = rto;
++
++	stats->wc_vars.CurTimeoutCount = 0;
++	
++	stats->wc_vars.RTTVar = (tcp_sk(sk)->rttvar >> 2) * 1000 / HZ;
++}
++
++void web100_update_timeout(struct sock *sk) {
++	struct web100stats *stats = tcp_sk(sk)->tcp_stats;
++
++	stats->wc_vars.CurTimeoutCount++;
++	if (inet_csk(sk)->icsk_backoff)
++		stats->wc_vars.SubsequentTimeouts++;
++	else
++		stats->wc_vars.Timeouts++;
++	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Open)
++		stats->wc_vars.AbruptTimeouts++;
++}
++
++void web100_update_mss(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	int mss = tp->mss_cache;
++	
++	stats->wc_vars.CurMSS = mss;
++	if (mss > stats->wc_vars.MaxMSS)
++		stats->wc_vars.MaxMSS = mss;
++	if (mss < stats->wc_vars.MinMSS)
++		stats->wc_vars.MinMSS = mss;
++}
++
++void web100_update_cwnd(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	__u16 mss = tp->mss_cache;
++	__u32 cwnd;
++	__u32 ssthresh;
++	
++	if (mss == 0) {
++		printk("Web100: web100_update_cwnd: mss == 0\n");
++		return;
++	}
++	
++	cwnd = min(WC_INF32 / mss, tp->snd_cwnd) * mss;
++	stats->wc_vars.CurCwnd = cwnd;
++	if (cwnd > stats->wc_vars.MaxCwnd)
++		stats->wc_vars.MaxCwnd = cwnd;
++	
++	ssthresh = min(WC_INF32 / mss, tp->snd_ssthresh) * mss;
++	stats->wc_vars.CurSsthresh = ssthresh;
++	
++	/* Discard initiail ssthresh set at infinity. */
++	if (tp->snd_ssthresh >= 0x7ffffff) {
++		return;
++	}
++	if (ssthresh > stats->wc_vars.MaxSsthresh)
++		stats->wc_vars.MaxSsthresh = ssthresh;
++	if (ssthresh < stats->wc_vars.MinSsthresh)
++		stats->wc_vars.MinSsthresh = ssthresh;
++}
++
++void web100_update_rwin_rcvd(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	__u32 win = tp->snd_wnd;
++	
++	stats->wc_vars.CurRwinRcvd = win;
++	if (win > stats->wc_vars.MaxRwinRcvd)
++		stats->wc_vars.MaxRwinRcvd = win;
++	if (win < stats->wc_vars.MinRwinRcvd)
++		stats->wc_vars.MinRwinRcvd = win;
++}
++
++void web100_update_rwin_sent(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	__u32 win = tp->rcv_wnd;
++
++	/* Update our advertised window. */
++	stats->wc_vars.CurRwinSent = win;
++	if (win > stats->wc_vars.MaxRwinSent)
++		stats->wc_vars.MaxRwinSent = win;
++	if (win < stats->wc_vars.MinRwinSent)
++		stats->wc_vars.MinRwinSent = win;
++}
++
++
++/* TODO: change this to a generic state machine instrument */
++static void web100_state_update(struct tcp_sock *tp, int why, __u64 bytes)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	__u64 now;
++	
++	now = web100_mono_time();
++	stats->wc_vars.SndLimTime[stats->wc_limstate] += now - stats->wc_limstate_time;
++	stats->wc_limstate_time = now;
++	
++	stats->wc_vars.SndLimBytes[why] += bytes - stats->wc_limstate_bytes;
++	stats->wc_limstate_bytes = bytes;
++	
++	if (stats->wc_limstate != why) {
++		stats->wc_limstate = why;
++		stats->wc_vars.SndLimTrans[why]++;
++	}
++}
++
++void web100_update_sndlim(struct tcp_sock *tp, int why)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	
++	if (why < 0) {
++		printk("web100_update_sndlim: BUG: why < 0\n");
++		return;
++	}
++	
++	web100_state_update(tp, why, stats->wc_vars.DataBytesOut);
++	/* future instruments on other sender bottlenecks here... */
++	/* if (!why) { why = ??? } */
++	/* web100_state_update(tp, why, stats->wc_vars.DataBytesOut); */
++}
++
++void web100_update_congestion(struct tcp_sock *tp, int why_dummy)
++{
++       	struct web100stats *stats = tp->tcp_stats;
++	
++	stats->wc_vars.CongestionSignals++;
++	stats->wc_vars.PreCongSumCwnd += stats->wc_vars.CurCwnd;
++
++	/* This may require more control flags */
++	stats->wc_vars.PreCongCountRTT++;
++	stats->wc_vars.PreCongSumRTT += stats->wc_vars.SampleRTT;
++}
++
++/* Called from tcp_transmit_skb, whenever we push a segment onto the wire.
++ */
++void web100_update_segsend(struct sock *sk, int len, int pcount,
++                           __u32 seq, __u32 end_seq, int flags)
++{
++	struct web100stats *stats = tcp_sk(sk)->tcp_stats;
++	
++	/* We know we're sending a segment. */
++	stats->wc_vars.PktsOut += pcount;
++	
++	/* We know the ack seq is rcv_nxt. web100_XXX bug compatible*/
++	web100_update_rcv_nxt(tcp_sk(sk));
++	
++	/* A pure ACK contains no data; everything else is data. */
++	if (len > 0) {
++		stats->wc_vars.DataPktsOut += pcount;
++		stats->wc_vars.DataBytesOut += len;
++	} else {
++		stats->wc_vars.AckPktsOut++;
++	}
++	
++	/* Check for retransmission. */
++	if (flags & TCPCB_FLAG_SYN) {
++		if (inet_csk(sk)->icsk_retransmits)
++			stats->wc_vars.PktsRetrans++;
++	} else if (before(seq, stats->wc_vars.SndMax)) {
++		stats->wc_vars.PktsRetrans += pcount;
++		stats->wc_vars.BytesRetrans += end_seq - seq;
++	}
++}
++
++void web100_update_segrecv(struct tcp_sock *tp, struct sk_buff *skb)
++{
++	struct web100directs *vars = &tp->tcp_stats->wc_vars;
++	struct tcphdr *th = tcp_hdr(skb);
++	
++	vars->PktsIn++;
++	if (skb->len == th->doff*4) {
++		vars->AckPktsIn++;
++		if (TCP_SKB_CB(skb)->ack_seq == tp->snd_una)
++			vars->DupAcksIn++;
++	} else {
++		vars->DataPktsIn++;
++		vars->DataBytesIn += skb->len - th->doff*4;
++	}
++}
++
++void web100_update_rcv_nxt(struct tcp_sock *tp)
++{
++	struct web100stats *stats = tp->tcp_stats;
++	
++	if (before(stats->wc_vars.RcvNxt, stats->wc_vars.RecvISS) &&
++	     after(tp->rcv_nxt, stats->wc_vars.RecvISS))
++		stats->wc_vars.RecvWraps++;
++	stats->wc_vars.ThruBytesReceived += (__u32) (tp->rcv_nxt - stats->wc_vars.RcvNxt); /* XXX */
++	stats->wc_vars.RcvNxt = tp->rcv_nxt;
++}
++
++void web100_update_writeq(struct sock *sk)
++{
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct web100directs *vars = &tp->tcp_stats->wc_vars;
++	int len = tp->write_seq - vars->SndMax;
++	
++	vars->CurAppWQueue = len;
++	if (len > vars->MaxAppWQueue)
++		vars->MaxAppWQueue = len;
++}
++
++void web100_update_recvq(struct sock *sk)
++{
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct web100directs *vars = &tp->tcp_stats->wc_vars;
++	int len1 = tp->rcv_nxt - tp->copied_seq;
++	
++	vars->CurAppRQueue = len1;
++	if (vars->MaxAppRQueue < len1)
++		vars->MaxAppRQueue = len1;
++	
++#if 0 /* FIXME!! */
++	vars->CurReasmQueue = len2;
++	if (vars->MaxReasmQueue < len2)
++		vars->MaxReasmQueue = len2;
++#endif
++}
++
++
++void __init web100_stats_init()
++{
++	int order;
++	
++	memset(death_slots, 0, sizeof (death_slots));
++	
++	web100stats_ht =
++	  (struct web100stats **)alloc_large_system_hash("TCP ESTATS",
++							 sizeof (struct web100stats *),
++							 tcp_hashinfo.ehash_size,
++							 (num_physpages >= 128 * 1024) ?
++							   13 : 15,
++							 0, &order, NULL,
++							 64 * 1024);
++	web100stats_htsize = 1 << order;
++	memset(web100stats_ht, 0, web100stats_htsize * sizeof (struct web100stats *));
++	
++#ifdef CONFIG_WEB100_NETLINK
++	if ((web100_nlsock = netlink_kernel_create(&init_net, NETLINK_WEB100, 0, NULL, NULL, NULL)) == NULL)
++		printk(KERN_ERR "web100_stats_init(): cannot initialize netlink socket\n");
++#endif
++	
++	printk("Web100 %s: Initialization successful\n", web100_version_string);
++}
++
++#ifdef CONFIG_IPV6_MODULE
++EXPORT_SYMBOL(web100_stats_create);
++EXPORT_SYMBOL(web100_stats_destroy);
++EXPORT_SYMBOL(web100_update_segrecv);
++EXPORT_SYMBOL(web100_update_cwnd);
++EXPORT_SYMBOL(web100_update_writeq);
++#endif
+diff --git a/net/ipv6/tcp_ipv6.c b/net/ipv6/tcp_ipv6.c
+index 21d100b..704e626 100644
+--- a/net/ipv6/tcp_ipv6.c
++++ b/net/ipv6/tcp_ipv6.c
+@@ -301,6 +301,11 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
+ 							     inet->sport,
+ 							     inet->dport);
+ 
++	WEB100_VAR_SET(tp, SndISS, tp->write_seq);
++	WEB100_VAR_SET(tp, SndMax, tp->write_seq);
++	WEB100_VAR_SET(tp, SndNxt, tp->write_seq);
++	WEB100_VAR_SET(tp, SndUna, tp->write_seq);
++	
+ 	err = tcp_connect(sk);
+ 	if (err)
+ 		goto late_failure;
+@@ -1362,6 +1367,13 @@ static struct sock * tcp_v6_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
+ 	newsk = tcp_create_openreq_child(sk, req, skb);
+ 	if (newsk == NULL)
+ 		goto out;
++#ifdef CONFIG_WEB100_STATS
++	if (web100_stats_create(newsk)) {
++		sk_free(newsk);
++		goto out;
++	}
++	tcp_sk(newsk)->tcp_stats->wc_vars.LocalAddressType = WC_ADDRTYPE_IPV6;
++#endif
+ 
+ 	/*
+ 	 * No need to charge this sock to the relevant IPv6 refcnt debug socks
+@@ -1671,6 +1683,7 @@ process:
+ 	skb->dev = NULL;
+ 
+ 	bh_lock_sock_nested(sk);
++	WEB100_UPDATE_FUNC(tcp_sk(sk), web100_update_segrecv(tcp_sk(sk), skb));
+ 	ret = 0;
+ 	if (!sock_owned_by_user(sk)) {
+ #ifdef CONFIG_NET_DMA
+@@ -1687,6 +1700,7 @@ process:
+ 		}
+ 	} else
+ 		sk_add_backlog(sk, skb);
++	WEB100_UPDATE_FUNC(tcp_sk(sk), web100_update_cwnd(tcp_sk(sk)));
+ 	bh_unlock_sock(sk);
+ 
+ 	sock_put(sk);
+@@ -1867,6 +1881,16 @@ static int tcp_v6_init_sock(struct sock *sk)
+ 	sk->sk_sndbuf = sysctl_tcp_wmem[1];
+ 	sk->sk_rcvbuf = sysctl_tcp_rmem[1];
+ 
++#ifdef CONFIG_WEB100_STATS
++	{
++		int err;
++		if ((err = web100_stats_create(sk))) {
++			return err;
++		}
++		tcp_sk(sk)->tcp_stats->wc_vars.LocalAddressType = WC_ADDRTYPE_IPV6;
++	}
++#endif
++	
+ 	local_bh_disable();
+ 	percpu_counter_inc(&tcp_sockets_allocated);
+ 	local_bh_enable();

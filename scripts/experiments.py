@@ -38,6 +38,7 @@ def main():
 
     devices = {}
     last_match = False
+    current_devices = []
     for line in open(options.devices, 'r'):
         if re.match(r'\s*#', line) is not None:
             continue

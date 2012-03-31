@@ -73,6 +73,7 @@ def main():
         except OSError, e:
             if e.errno != errno.EEXIST:
                 raise
+        print 'Writing', output_path
         handle = open(output_path, 'w')
         for experiment in exps:
             handle.write(''.join(experiments[experiment]))

@@ -37,7 +37,7 @@ def main():
                 experiments[current_experiment] = [line]
 
     devices = {}
-    last_match = False
+    device_matched = False
     current_devices = []
     for line in open(options.devices, 'r'):
         if re.match(r'\s*#', line) is not None:
@@ -45,12 +45,12 @@ def main():
 
         device_match = re.match(r'(\S+)$', line)
         if device_match is not None:
-            if not last_match:
+            if not device_matched:
                 current_devices = []
             current_devices.append(device_match.group(1))
-            last_match = True
+            device_matched = True
         else:
-            last_match = False
+            device_matched = False
 
         if current_devices != []:
             name_match = re.match(r'\s+(\S+)$', line)

@@ -1,29 +1,15 @@
-Release: Quirm
-Status: Release Candidate 3
+BISmark is the Broadband Internet Service BenchMARK. It is a project led by
+Georgia Tech and the University of Napoli Federico II to develop an
+OpenWRT-based platform for performing measurements of ISP performance, as well
+as traffic inside the home. You can use BISmark to measure the performance of
+their ISP, visualize and monitor traffic patterns from your users and devices
+inside your home network, and manage your usage caps.
 
-Differences from Klatch:
-Quirm is substantially different from Klatch. Klatch was based on OpenWRT 
-trunk circa September 2011, while Quirm is based on Backfire 10.03.1. The
-reasons for going back were mostly stability and the perceived need for a
-good checkpoint. Many packages are affected; most notably, the Linux kernel
-for Klatch is 2.6.37 while Quirm is 2.6.32. Other packages like OpenSSL have
-also moved back, this may cause unexpected behavior for packages that depend
-on them (for eg; the certification hashing algorithm for OpenSSL is different).
-Please keep this in mind while porting Klatch packages to Quirm. The full
-list of packages and versions may be obtained from the build or from the 
-OpenWRT page.
+BISmark is a customized distribution of OpenWRT. The standard base build has a
+host of useful networking tools, including iperf, netperf, traceroute,
+paris-traceroute, tcptraceroute, ping, fping, bing and ditg.
 
-BISmark:
-There has been much development of the BISmark suite since Klatch. Package
-development, deployment, and maintenance have been made substantially easier with the 
-bismark-experiments-manager and the bismark-updater tools. Packages can be deployed
-and updated on a per-router basis. The bismark-ucap package allows 
-more control over how users use the network. There is also a standard
-data uploader bismark-data-uploader. No significant changes have been made to 
-bismark-mgmt, but bismark-active will now reside solely in ramfs. The standard
-base build has a host of useful networking tools such as iperf, netperf, traceroute,
-paris-traceroute, tcptraceroute, ping, fping, bing, ditg, etc.
+For more information, see http://projectbismark.net
 
 Acknowledgments:
 The OpenWRT team.
-

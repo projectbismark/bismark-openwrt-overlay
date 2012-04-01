@@ -1,0 +1,25 @@
+Release: Quirm
+Status: Release Candidate 4
+
+Changes:
+- Based on OpenWRT Backfire 10.03.1. This is actually an older version of
+  OpenWRT than used for Klatch. The reasons for reverting were stability and the
+  perceived need for a good checkpoint. Many packages are affected; most
+  notably, the Linux kernel for Klatch is 2.6.37 while Quirm is 2.6.32. Other
+  packages like OpenSSL have also moved back, which may cause unexpected
+  behavior for packages that depend on them (e.g., the certification hashing
+  algorithm for OpenSSL is different).  Keep this in mind while porting Klatch
+  packages to Quirm. The full list of packages and versions may be obtained from
+  the build or from the OpenWRT page.
+- New package: bismark-updater automatically updates software on routers. It is
+  capable of doing per-router updates.
+- New package: bismark-experiments-manager and
+  luci-app-bismark-experiments-manager automatically download lists of
+  "experiments", which are collections
+  of packages. The user can opt in to experiments using a LuCI panel.
+- New package: bismark-data-uploader transfers measurement logs to the server.
+- bismark-active is now bismark-active-tmpfs, and resides in RAM.
+  A fresh copy is downloaded every time the router restarts.
+- The default build is compatible with uCap, a software suite for letting
+  users monitor and control traffic on their home network. After undergoing
+  informed consent, users can enable uCap using LuCI.

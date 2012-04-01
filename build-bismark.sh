@@ -11,4 +11,6 @@ svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force
 ./scripts/feeds update
 git checkout .config
 ./scripts/feeds install -a
-make
+make -j 4
+scripts/special-packages.sh
+scripts/experiments.py

@@ -7,10 +7,16 @@
 #   git clone https://github.com/projectbismark/bismark-openwrt-overlay.git $BUILDROOT
 #
 # where BUILDROOT is something like "quirm-rc3"
+
+VERSION_NAME=quirm
+REVISION_NAME=rc5
+
 svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force
 ./scripts/feeds update
 git checkout .config
 ./scripts/feeds install -a
 make -j 4
-scripts/special-packages.sh
-scripts/experiments.py
+
+WEB_DIR=/data/users/bismark/builds/${VERSION_NAME}/${REVISION_NAME}
+scripts/experiments-to-www.sh $WEB_DIR
+scripts/release-to-web.sh $WEB_DIR

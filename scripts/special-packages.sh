@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 
+if [ "x$1" == "x" ]; then
+    build_dir="bin/ar71xx"
+else
+    build_dir="$1"
+fi
 config_file=scripts/special-packages.conf
 delim=" "
 base_dir=`pwd`
-build_dir="bin/ar71xx"
 dirs="packages updates experiments"
 awk '/^[[:alnum:]\-]+ [[:alnum:]\-]+[ ]*$/' $config_file | sort -u | while read i; do
 	package=`echo $i | cut -d"$delim" -f1`

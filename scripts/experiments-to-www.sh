@@ -6,5 +6,6 @@ if [ "x$1" == "x" ]; then
 fi
 
 DEST_DIR=$1
+mkdir -p $DEST_DIR/ar71xx
 scripts/special-packages.sh $DEST_DIR/ar71xx
 scripts/experiments.py --output-directory=$DEST_DIR/ar71xx

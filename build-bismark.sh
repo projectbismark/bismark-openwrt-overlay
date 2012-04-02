@@ -8,6 +8,7 @@
 #
 # where BUILDROOT is something like "quirm-rc3"
 
+WEB_ROOT=/data/users/bismark/builds
 VERSION_NAME=quirm
 REVISION_NAME=rc5
 
@@ -17,6 +18,6 @@ git checkout .config
 ./scripts/feeds install -a
 make -j 4
 
-WEB_DIR=/data/users/bismark/builds/${VERSION_NAME}/${REVISION_NAME}
+WEB_DIR=$WEB_ROOT/$VERSION_NAME/$REVISION_NAME
 scripts/experiments-to-www.sh $WEB_DIR
-scripts/release-to-web.sh $WEB_DIR
+scripts/release-to-www.sh $WEB_DIR

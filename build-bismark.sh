@@ -19,5 +19,4 @@ git checkout .config
 make -j 4
 
 WEB_DIR=$WEB_ROOT/$VERSION_NAME/$REVISION_NAME
-scripts/experiments-to-www.sh $WEB_DIR
 scripts/release-to-www.sh $WEB_DIR

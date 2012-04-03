@@ -8,6 +8,8 @@ fi
 DEST_DIR=$1
 BUILD_DIR=$PWD
 
+scripts/experiments-to-www.sh $DEST_DIR
+
 mkdir -p $DEST_DIR/ar71xx/packages
 cp bin/ar71xx/openwrt-bismark_*-sysupgrade*.bin $DEST_DIR/ar71xx
 cp bin/ar71xx/openwrt-bismark_*-factory*.img $DEST_DIR/ar71xx

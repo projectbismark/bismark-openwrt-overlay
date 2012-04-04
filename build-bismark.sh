@@ -16,8 +16,9 @@ RELEASE_NAME=$(sed -n '2p' files/etc/issue)
 
 svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force
 ./scripts/feeds update
-git checkout .config
+git checkout -- .config
 ./scripts/feeds install -a
+git checkout -- files/etc/opkg.conf
 sed -i "s/BISMARK-RELEASE/$RELEASE_NAME/" files/etc/opkg.conf
 make -j 4
 

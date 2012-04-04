@@ -97,6 +97,8 @@ changed
       selected by default in Qurim. bismark-active-tmpfs is installed on the
       /tmp tmpfs (ram disk). A fresh, up-to-date copy is downloaded every time
       the router is booted.
+    - Active measurements now include a latency test to candidate measurement
+      servers once every 24h.
 
 - packages/bismark-mgmt
     - bismark-mgmt now runs a separate dropbear (sshd) instance on a separate

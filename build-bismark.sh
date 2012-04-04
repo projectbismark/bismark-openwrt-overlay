@@ -10,7 +10,7 @@
 
 WEB_ROOT=/data/users/bismark/builds
 VERSION_NAME=quirm
-REVISION_NAME=rc5
+REVISION_NAME=final
 
 svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force
 ./scripts/feeds update

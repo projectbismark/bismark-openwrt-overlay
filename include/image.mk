@@ -15,7 +15,9 @@ override MAKEFLAGS=
 override MAKE:=$(SUBMAKE)
 KDIR=$(KERNEL_BUILD_DIR)
 
-IMG_PREFIX:=openwrt-bismark_quirm_rc5-$(BOARD)$(if $(SUBTARGET),-$(SUBTARGET))
+BISMARK_RELEASE:=$(shell head -n 1 $(INCLUDE_DIR)/../files/etc/issue || echo '')
+
+IMG_PREFIX:=openwrt$(if $(BISMARK_RELEASE),-$(BISMARK_RELEASE))-$(BOARD)$(if $(SUBTARGET),-$(SUBTARGET))
 
 ifneq ($(CONFIG_BIG_ENDIAN),)
   JFFS2OPTS     :=  --pad --big-endian --squash -v

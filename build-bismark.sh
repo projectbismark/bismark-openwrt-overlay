@@ -8,15 +8,18 @@
 #
 # where BUILDROOT is something like "quirm-rc3"
 
+set -o errexit
+set -o nounset
+
 WEB_ROOT=/data/users/bismark/builds
-VERSION_NAME=quirm
-REVISION_NAME=rc5
+RELEASE_NAME=$(sed -n '2p' files/etc/issue)
 
 svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force
 ./scripts/feeds update
 git checkout .config
 ./scripts/feeds install -a
+sed -i "s/BISMARK-RELEASE/$RELEASE_NAME/" files/etc/opkg.conf
 make -j 4
 
-WEB_DIR=$WEB_ROOT/$VERSION_NAME/$REVISION_NAME
+WEB_DIR=$WEB_ROOT/$RELEASE_NAME
 scripts/release-to-www.sh $WEB_DIR

@@ -14,7 +14,7 @@ config dnsmasq
 	option readethers	1
 	option leasefile	'/tmp/dhcp.leases'
 	option resolvfile	'/tmp/resolv.conf.auto'
-	option interface_name	myrouter.projectbismark.net,br-lan
+	option interface_name	'myrouter.projectbismark.net,br-lan'
 	#list server		'/mycompany.local/1.2.3.4'
 	#option nonwildcard	1
 	#list interface		br-lan

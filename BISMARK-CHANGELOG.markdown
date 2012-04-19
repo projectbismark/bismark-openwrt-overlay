@@ -2,8 +2,8 @@ Release Information
 ===================
 
  - Release name:   Quirm 2012.04
- - Release status: Release Candidate 5
- - Release date:   5 April 2012
+ - Release status: Stable Release
+ - Release date:   12 April 2012
 
 Changes since 'Klatch' 2011.09 release
 ======================================

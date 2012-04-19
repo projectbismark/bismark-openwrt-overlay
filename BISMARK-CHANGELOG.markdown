@@ -90,7 +90,7 @@ changed
       (e.g. `openwrt-bismark_quirm-ar71xx-wndr3700v2-squashfs-factory.img`).
 
 - kernel: Linux 2.6.32
-    - The kernel has been upgraded from 2.6.27 to 2.6.32.
+    - The kernel has been downgraded from 2.6.39 to 2.6.32.
 
 - packages/bismark-active(-tmpfs)
     - bismark-active has a -tmpfs variant, 'bismark-active-tmpfs' that is

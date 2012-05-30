@@ -10,7 +10,9 @@
                   B I S m a r k   Broadband Internet
                                    Service benchMARK
  ---------------------------------------------------
- Quirm - Based on:
+ BISMARK_PRETTY_RELEASE (BISMARK_SHORTHASH, BISMARK_BUILD_DATE)
+
+ Based on:
   _______                     ________        __
  |       |.-----.-----.-----.|  |  |  |.----.|  |_
  |   -   ||  _  |  -__|     ||  |  |  ||   _||   _|

@@ -44,6 +44,18 @@ git_checkout()
     cd $thepwd
 }
 
+# Sanity test -- check that build dir name is equal to release name
+fullpath="$PWD/$0"
+path=$(dirname $fullpath)
+abspath=$(cd $path; pwd)
+builddir=$(basename $abspath)
+if [ $builddir != $BISMARK_RELEASE ]; then
+    echo "Build directory '$builddir' does not match release name '$BISMARK_RELEASE'."
+    echo "This is probably not what you want. Terminating."
+    echo "(edit BISMARK_RELEASE in build-bismark.sh to fix this.)"
+    exit 1
+fi
+
 # Computed build parameters
 BISMARK_PRETTY_RELEASE=$(echo $BISMARK_RELEASE | \
         awk '{print toupper(substr($0,1,1)) substr($0,2)}')

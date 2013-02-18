@@ -11,7 +11,7 @@ DEST_DIR=$1
 
 echo "You are about to deploy OpenWRT package updates."
 echo "Source: $BUILD_ROOT"
-echo "Destination: $SCRIPT_DIR"
+echo "Destination: $DEST_DIR"
 echo "This will copy packages marked as updates in special-packages.conf."
 echo "If you want to deploy a full OpenWRT build, deploy-release.sh instead."
 read -p "Are you sure you want to continue? (yN) " -n 1 -r

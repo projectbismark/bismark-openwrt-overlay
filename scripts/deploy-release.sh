@@ -11,7 +11,7 @@ DEST_DIR=$1
 
 echo "You are about to deploy an OpenWRT build."
 echo "Source: $BUILD_ROOT"
-echo "Destination: $SCRIPT_DIR"
+echo "Destination: $DEST_DIR"
 echo "This will copy all packages and experiments from the build tree."
 echo "DO NOT RUN THIS COMMAND ON AN UPDATES BUILD TREE. Run deploy-updates.sh instead."
 read -p "Are you sure you want to continue? (yN) " -n 1 -r

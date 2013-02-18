@@ -11,7 +11,7 @@
 set -o errexit
 set -o nounset
 
-WEB_ROOT=/data/users/bismark/builds
+DEPLOY_ROOT=/data/users/bismark/builds
 RELEASE_NAME=$(sed -n '2p' files/etc/issue)
 
 svn co svn://svn.openwrt.org/openwrt/tags/backfire_10.03.1 . --force

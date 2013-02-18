@@ -22,5 +22,7 @@ git checkout -- files/etc/opkg.conf
 sed -i "s/BISMARK-RELEASE/$RELEASE_NAME/" files/etc/opkg.conf
 make -j 4
 
-WEB_DIR=$WEB_ROOT/$RELEASE_NAME
-scripts/release-to-www.sh $WEB_DIR
+# Uncomment one of the following depending on whether you're making a base
+# build or an updates build.
+#scripts/deploy-release.sh $DEPLOY_ROOT/$RELEASE_NAME
+#scripts/deploy-updates.sh $DEPLOY_ROOT/$RELEASE_NAME

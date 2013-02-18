@@ -10,7 +10,7 @@
 
 # Build parameters
 BISMARK_RELEASE="quirm2"
-WEB_ROOT=/data/users/bismark/builds
+DEPLOY_ROOT=/data/users/bismark/downloads
 OPENWRT_TAG="backfire_10.03.1"
 FEEDS_BISMARK_PACKAGES_REV="dfe318f8cc24606f7ce47d9bc34fc434da5d2684"
 FEEDS_LUCI_BISMARK_REV="4fc56b03424275b6a54ae8143b5dcf474536267c"
@@ -97,5 +97,7 @@ done
 # Start building
 make -j 4
 
-WEB_DIR=$WEB_ROOT/$BISMARK_RELEASE
-scripts/release-to-www.sh $WEB_DIR
+# Uncomment one of the following depending on whether you're making a base
+# build or an updates build.
+#scripts/deploy-release.sh $DEPLOY_ROOT/$RELEASE_NAME
+#scripts/deploy-updates.sh $DEPLOY_ROOT/$RELEASE_NAME

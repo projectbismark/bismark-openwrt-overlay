@@ -6,12 +6,12 @@
 # First run this command manually:
 #   git clone https://github.com/projectbismark/bismark-openwrt-overlay.git $BUILDROOT
 #
-# where BUILDROOT is something like "quirm-rc3"
+# where BUILDROOT is something like "lancre"
 
 # Build parameters
-BISMARK_RELEASE="quirm-updates"
+BISMARK_RELEASE="lancre-rc1"
 DEPLOY_ROOT=/data/users/bismark/downloads
-OPENWRT_TAG="backfire_10.03.1"
+OPENWRT_TAG="attitude_adjustment_12.09"
 FEEDS_BISMARK_PACKAGES_REV="HEAD"
 FEEDS_LUCI_BISMARK_REV="HEAD"
 
@@ -76,7 +76,7 @@ git_checkout bismark-feeds/bismark-packages \
              git://github.com/projectbismark/bismark-packages.git \
              $FEEDS_BISMARK_PACKAGES_REV
 git_checkout bismark-feeds/luci-bismark \
-             git://github.com/projectbismark/luci-bismark.git \
+             git://github.com/shahifaqeer/luci-0.11.git \
              $FEEDS_LUCI_BISMARK_REV
 
 # Prepare buildroot

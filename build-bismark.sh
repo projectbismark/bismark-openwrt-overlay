@@ -87,15 +87,15 @@ git checkout -- .config
 # Substitute parameters in each of param_files
 for file in $param_files; do
     git checkout -- $file
-    sed -i "s/BISMARK_RELEASE/$BISMARK_RELEASE/g; \
-            s/BISMARK_PRETTY_RELEASE/$BISMARK_PRETTY_RELEASE/g; \
-            s/BISMARK_HASH/$BISMARK_HASH/g; \
-            s/BISMARK_SHORTHASH/$BISMARK_SHORTHASH/g; \
-            s/BISMARK_BUILD_DATE/$BISMARK_BUILD_DATE/g" $file
+    sed -i "s/BISMARK-RELEASE/$BISMARK_RELEASE/g; \
+            s/BISMARK-PRETTY-RELEASE/$BISMARK_PRETTY_RELEASE/g; \
+            s/BISMARK-HASH/$BISMARK_HASH/g; \
+            s/BISMARK-SHORTHASH/$BISMARK_SHORTHASH/g; \
+            s/BISMARK-BUILD-DATE/$BISMARK_BUILD_DATE/g" $file
 done
 
 # Start building
-make -j 4
+make # use -j 4 only for subsequent builds. usually doesn't work the first time.
 
 # Uncomment one of the following depending on whether you're making a base
 # build or an updates build.

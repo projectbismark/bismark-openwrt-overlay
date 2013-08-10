@@ -94,6 +94,7 @@ for file in $param_files; do
             s/BISMARK-BUILD-DATE/$BISMARK_BUILD_DATE/g" $file
 done
 
+sed -e 's|opkg/host|opkg-bismark/host|g' -i package/base-files/Makefile
 # Start building
 make # use -j 4 only for subsequent builds. usually doesn't work the first time.
 

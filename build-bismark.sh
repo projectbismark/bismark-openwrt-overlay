@@ -6,12 +6,12 @@
 # First run this command manually:
 #   git clone https://github.com/projectbismark/bismark-openwrt-overlay.git $BUILDROOT
 #
-# where BUILDROOT is something like "quirm-rc3"
+# where BUILDROOT is something like "lancre"
 
 # Build parameters
-BISMARK_RELEASE="quirm-updates"
+BISMARK_RELEASE="lancre-rc1"
 DEPLOY_ROOT=/data/users/bismark/downloads
-OPENWRT_TAG="backfire_10.03.1"
+OPENWRT_TAG="attitude_adjustment_12.09"
 FEEDS_BISMARK_PACKAGES_REV="HEAD"
 FEEDS_LUCI_BISMARK_REV="HEAD"
 
@@ -76,7 +76,7 @@ git_checkout bismark-feeds/bismark-packages \
              git://github.com/projectbismark/bismark-packages.git \
              $FEEDS_BISMARK_PACKAGES_REV
 git_checkout bismark-feeds/luci-bismark \
-             git://github.com/projectbismark/luci-bismark.git \
+             git://github.com/shahifaqeer/luci-0.11.git \
              $FEEDS_LUCI_BISMARK_REV
 
 # Prepare buildroot
@@ -87,15 +87,16 @@ git checkout -- .config
 # Substitute parameters in each of param_files
 for file in $param_files; do
     git checkout -- $file
-    sed -i "s/BISMARK_RELEASE/$BISMARK_RELEASE/g; \
-            s/BISMARK_PRETTY_RELEASE/$BISMARK_PRETTY_RELEASE/g; \
-            s/BISMARK_HASH/$BISMARK_HASH/g; \
-            s/BISMARK_SHORTHASH/$BISMARK_SHORTHASH/g; \
-            s/BISMARK_BUILD_DATE/$BISMARK_BUILD_DATE/g" $file
+    sed -i "s/BISMARK-RELEASE/$BISMARK_RELEASE/g; \
+            s/BISMARK-PRETTY-RELEASE/$BISMARK_PRETTY_RELEASE/g; \
+            s/BISMARK-HASH/$BISMARK_HASH/g; \
+            s/BISMARK-SHORTHASH/$BISMARK_SHORTHASH/g; \
+            s/BISMARK-BUILD-DATE/$BISMARK_BUILD_DATE/g" $file
 done
 
+sed -e 's|opkg/host|opkg-bismark/host|g' -i package/base-files/Makefile
 # Start building
-make -j 4
+make # use -j 4 only for subsequent builds. usually doesn't work the first time.
 
 # Uncomment one of the following depending on whether you're making a base
 # build or an updates build.

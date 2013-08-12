@@ -6,8 +6,6 @@ mac80211_hostapd_setup_base() {
 	local ifname="$2"
 
 	cfgfile="/var/run/hostapd-$phy.conf"
-	macfile="/var/run/hostapd-$phy.maclist"
-	[ -e "$macfile" ] && rm -f "$macfile"
 
 	config_get device "$vif" device
 	config_get country "$device" country
@@ -50,24 +48,6 @@ mac80211_hostapd_setup_base() {
 	config_get_bool country_ie "$device" country_ie "$country_ie"
 	[ "$country_ie" -gt 0 ] && append base_cfg "ieee80211d=1" "$N"
 
-	config_get macfilter "$vif" macfilter
-	case "$macfilter" in
-		allow)
-			append base_cfg "macaddr_acl=1" "$N"
-			append base_cfg "accept_mac_file=$macfile" "$N"
-			;;
-		deny)
-			append base_cfg "macaddr_acl=0" "$N"
-			append base_cfg "deny_mac_file=$macfile" "$N"
-			;;
-	esac
-	config_get maclist "$vif" maclist
-	[ -n "$maclist" ] && {
-		for mac in $maclist; do
-			echo "$mac" >> $macfile
-		done
-	}
-
 	local br brval brstr
 	[ -n "$basic_rate_list" ] && {
 		for br in $basic_rate_list; do
@@ -76,7 +56,7 @@ mac80211_hostapd_setup_base() {
 			brstr="$brstr$brval"
 		done
 	}
-	
+
 	cat >> "$cfgfile" <<EOF
 ctrl_interface=/var/run/hostapd-$phy
 driver=nl80211
@@ -181,26 +161,46 @@ mac80211_start_vif() {
 	set_wifi_up "$vif" "$ifname"
 }
 
+lookup_phy() {
+	[ -n "$phy" ] && {
+		[ -d /sys/class/ieee80211/$phy ] && return
+	}
+
+	local devpath
+	config_get devpath "$device" path
+	[ -n "$devpath" -a -d "/sys/devices/$devpath/ieee80211" ] && {
+		phy="$(ls /sys/devices/$devpath/ieee80211 | grep -m 1 phy)"
+		[ -n "$phy" ] && return
+	}
+
+	local macaddr="$(config_get "$device" macaddr | tr 'A-Z' 'a-z')"
+	[ -n "$macaddr" ] && {
+		for _phy in $(ls /sys/class/ieee80211 2>/dev/null); do
+			[ "$macaddr" = "$(cat /sys/class/ieee80211/${_phy}/macaddress)" ] || continue
+			phy="$_phy"
+			return
+		done
+	}
+	phy=
+	return
+}
+
 find_mac80211_phy() {
 	local device="$1"
 
-	local macaddr="$(config_get "$device" macaddr | tr 'A-Z' 'a-z')"
 	config_get phy "$device" phy
-	[ -z "$phy" -a -n "$macaddr" ] && {
-		for phy in $(ls /sys/class/ieee80211 2>/dev/null); do
-			[ "$macaddr" = "$(cat /sys/class/ieee80211/${phy}/macaddress)" ] || continue
-			config_set "$device" phy "$phy"
-			break
-		done
-		config_get phy "$device" phy
-	}
+	lookup_phy
 	[ -n "$phy" -a -d "/sys/class/ieee80211/$phy" ] || {
 		echo "PHY for wifi device $1 not found"
 		return 1
 	}
+	config_set "$device" phy "$phy"
+
+	config_get macaddr "$device" macaddr
 	[ -z "$macaddr" ] && {
 		config_set "$device" macaddr "$(cat /sys/class/ieee80211/${phy}/macaddress)"
 	}
+
 	return 0
 }
 
@@ -270,17 +270,35 @@ get_freq() {
 }
 
 mac80211_generate_mac() {
-	local off="$1"
-	local mac="$2"
-	local oIFS="$IFS"; IFS=":"; set -- $mac; IFS="$oIFS"
+	local id="$1"
+	local ref="$2"
+	local mask="$3"
 
-	local b2mask=0x00
-	[ $off -gt 0 ] && b2mask=0x02
+	[ "$mask" = "00:00:00:00:00:00" ] && mask="ff:ff:ff:ff:ff:ff";
+	local oIFS="$IFS"; IFS=":"; set -- $mask; IFS="$oIFS"
 
-	printf "%02x:%s:%s:%s:%02x:%02x" \
-		$(( 0x$1 | $b2mask )) $2 $3 $4 \
-		$(( (0x$5 + ($off / 0x100)) % 0x100 )) \
-		$(( (0x$6 + $off) % 0x100 ))
+	local mask1=$1
+	local mask6=$6
+
+	local oIFS="$IFS"; IFS=":"; set -- $ref; IFS="$oIFS"
+	[ "$((0x$mask1))" -gt 0 ] && {
+		b1="0x$1"
+		[ "$id" -gt 0 ] && \
+			b1=$(($b1 ^ ((($id - 1) << 2) | 0x2)))
+		printf "%02x:%s:%s:%s:%s:%s" $b1 $2 $3 $4 $5 $6
+		return
+	}
+
+	[ "$((0x$mask6))" -lt 255 ] && {
+		printf "%s:%s:%s:%s:%s:%02x" $1 $2 $3 $4 $5 $(( 0x$6 ^ $id ))
+		return
+	}
+
+	off2=$(( (0x$6 + $id) / 0x100 ))
+	printf "%s:%s:%s:%s:%02x:%02x" \
+		$1 $2 $3 $4 \
+		$(( (0x$5 + $off2) % 0x100 )) \
+		$(( (0x$6 + $id) % 0x100 ))
 }
 
 enable_mac80211() {
@@ -292,6 +310,7 @@ enable_mac80211() {
 	config_get distance "$device" distance
 	config_get txantenna "$device" txantenna all
 	config_get rxantenna "$device" rxantenna all
+	config_get antenna_gain "$device" antenna_gain 0
 	config_get frag "$device" frag
 	config_get rts "$device" rts
 	find_mac80211_phy "$device" || return 0
@@ -309,15 +328,16 @@ enable_mac80211() {
 		}
 	}
 
-	config_get ath9k_chanbw "$device" ath9k_chanbw
-	[ -n "$ath9k_chanbw" -a -d /sys/kernel/debug/ieee80211/$phy/ath9k ] && echo "$ath9k_chanbw" > /sys/kernel/debug/ieee80211/$phy/ath9k/chanbw
+	config_get chanbw "$device" chanbw
+	[ -n "$chanbw" -a -d /sys/kernel/debug/ieee80211/$phy/ath9k ] && echo "$chanbw" > /sys/kernel/debug/ieee80211/$phy/ath9k/chanbw
+	[ -n "$chanbw" -a -d /sys/kernel/debug/ieee80211/$phy/ath5k ] && echo "$chanbw" > /sys/kernel/debug/ieee80211/$phy/ath5k/bwmode
 
-	[ -n "$country" ] && iw reg set "$country"
 	[ "$channel" = "auto" -o "$channel" = "0" ] || {
 		fixed=1
 	}
 
 	iw phy "$phy" set antenna $txantenna $rxantenna >/dev/null 2>&1
+	iw phy "$phy" set antenna_gain $antenna_gain
 
 	[ -n "$distance" ] && iw phy "$phy" set distance "$distance"
 	[ -n "$frag" ] && iw phy "$phy" set frag "${frag%%.*}"
@@ -363,7 +383,7 @@ enable_mac80211() {
 				iw phy "$phy" interface add "$ifname" type managed $wdsflag
 				config_get_bool powersave "$vif" powersave 0
 				[ "$powersave" -gt 0 ] && powersave="on" || powersave="off"
-				iwconfig "$ifname" power "$powersave"
+				iw "$ifname" set power_save "$powersave"
 			;;
 		esac
 
@@ -373,7 +393,7 @@ enable_mac80211() {
 		config_get macaddr "$device" macaddr
 		config_get vif_mac "$vif" macaddr
 		[ -n "$vif_mac" ] || {
-			vif_mac="$(mac80211_generate_mac $macidx $macaddr)"
+			vif_mac="$(mac80211_generate_mac $macidx $macaddr $(cat /sys/class/ieee80211/${phy}/address_mask))"
 			macidx="$(($macidx + 1))"
 		}
 		[ "$mode" = "ap" ] || ifconfig "$ifname" hw ether "$vif_mac"
@@ -391,14 +411,13 @@ enable_mac80211() {
 			# We attempt to set the channel for all interfaces, although
 			# mac80211 may not support it or the driver might not yet
 			# for ap mode this is handled by hostapd
-			[ -n "$fixed" -a -n "$channel" ] && iw dev "$ifname" set channel "$channel"
+			config_get htmode "$device" htmode
+			case "$htmode" in
+				HT20|HT40+|HT40-) ;;
+				*) htmode= ;;
+			esac
+			[ -n "$fixed" -a -n "$channel" ] && iw dev "$ifname" set channel "$channel" $htmode
 		fi
-
-		config_get vif_txpower "$vif" txpower
-		# use vif_txpower (from wifi-iface) to override txpower (from
-		# wifi-device) if the latter doesn't exist
-		txpower="${txpower:-$vif_txpower}"
-		[ -z "$txpower" ] || iw dev "$ifname" set txpower fixed "${txpower%%.*}00"
 
 		i=$(($i + 1))
 	done
@@ -431,85 +450,113 @@ enable_mac80211() {
 	for vif in $vifs; do
 		config_get mode "$vif" mode
 		config_get ifname "$vif" ifname
-		[ ! "$mode" = "ap" ] || continue
-		ifconfig "$ifname" up
+		[ "$mode" = "ap" ] || ifconfig "$ifname" up
 
-		if [ ! "$mode" = "ap" ]; then
-			ifconfig "$ifname" up
-			case "$mode" in
-				adhoc)
-					config_get bssid "$vif" bssid
-					config_get ssid "$vif" ssid
-					config_get beacon_int "$device" beacon_int
-					config_get basic_rate_list "$device" basic_rate
-					config_get encryption "$vif" encryption
-					config_get key "$vif" key 1
-					config_get mcast_rate "$vif" mcast_rate
+		config_get vif_txpower "$vif" txpower
+		# use vif_txpower (from wifi-iface) to override txpower (from
+		# wifi-device) if the latter doesn't exist
+		txpower="${txpower:-$vif_txpower}"
+		[ -z "$txpower" ] || iw dev "$ifname" set txpower fixed "${txpower%%.*}00"
 
-					local keyspec=""
-					[ "$encryption" == "wep" ] && {
-						case "$key" in
-							[1234])
-								local idx
-								for idx in 1 2 3 4; do
-									local ikey
-									config_get ikey "$vif" "key$idx"
+		case "$mode" in
+			adhoc)
+				config_get bssid "$vif" bssid
+				config_get ssid "$vif" ssid
+				config_get beacon_int "$device" beacon_int
+				config_get basic_rate_list "$device" basic_rate
+				config_get encryption "$vif" encryption
+				config_get key "$vif" key 1
+				config_get mcast_rate "$vif" mcast_rate
+				config_get htmode "$device" htmode
+				case "$htmode" in
+					HT20|HT40+|HT40-) ;;
+					*) htmode= ;;
+				esac
 
-									[ -n "$ikey" ] && {
-										ikey="$(($idx - 1)):$(prepare_key_wep "$ikey")"
-										[ $idx -eq $key ] && ikey="d:$ikey"
-										append keyspec "$ikey"
-									}
-								done
-							;;
-							*) append keyspec "d:0:$(prepare_key_wep "$key")" ;;
-						esac
-					}
 
-					local br brval brsub brstr
-					[ -n "$basic_rate_list" ] && {
-						for br in $basic_rate_list; do
-							brval="$(($br / 1000))"
-							brsub="$((($br / 100) % 10))"
-							[ "$brsub" -gt 0 ] && brval="$brval.$brsub"
-							[ -n "$brstr" ] && brstr="$brstr,"
-							brstr="$brstr$brval"
-						done
-					}
-
-					local mcval=""
-					[ -n "$mcast_rate" ] && {
-						mcval="$(($mcast_rate / 1000))"
-						mcsub="$(( ($mcast_rate / 100) % 10 ))"
-						[ "$mcsub" -gt 0 ] && mcval="$mcval.$mcsub"
-					}
-
-					config_get htmode "$device" htmode
-					case "$htmode" in
-						HT20|HT40+|HT40-) ;;
-						*) htmode= ;;
-					esac
-
-					iw dev "$ifname" ibss join "$ssid" $freq $htmode \
-						${fixed:+fixed-freq} $bssid \
-						${beacon_int:+beacon-interval $beacon_int} \
-						${brstr:+basic-rates $brstr} \
-						${mcval:+mcast-rate $mcval} \
-						${keyspec:+keys $keyspec}
-				;;
-				sta)
+				local keyspec=""
+				[ "$encryption" == "psk" -o "$encryption" == "psk2" ] && {
 					if eval "type wpa_supplicant_setup_vif" 2>/dev/null >/dev/null; then
-						wpa_supplicant_setup_vif "$vif" nl80211 "${hostapd_ctrl:+-H $hostapd_ctrl}" || {
+						wpa_supplicant_setup_vif "$vif" nl80211 "${hostapd_ctrl:+-H $hostapd_ctrl}" $freq $htmode || {
 							echo "enable_mac80211($device): Failed to set up wpa_supplicant for interface $ifname" >&2
 							# make sure this wifi interface won't accidentally stay open without encryption
 							ifconfig "$ifname" down
-							continue
 						}
+						mac80211_start_vif "$vif" "$ifname"
+						continue
 					fi
-				;;
-			esac
-			mac80211_start_vif "$vif" "$ifname"
-		fi
+				}
+
+				[ "$encryption" == "wep" ] && {
+					case "$key" in
+						[1234])
+							local idx
+							for idx in 1 2 3 4; do
+								local ikey
+								config_get ikey "$vif" "key$idx"
+
+								[ -n "$ikey" ] && {
+									ikey="$(($idx - 1)):$(prepare_key_wep "$ikey")"
+									[ $idx -eq $key ] && ikey="d:$ikey"
+									append keyspec "$ikey"
+								}
+							done
+						;;
+						*) append keyspec "d:0:$(prepare_key_wep "$key")" ;;
+					esac
+				}
+
+				local br brval brsub brstr
+				[ -n "$basic_rate_list" ] && {
+					for br in $basic_rate_list; do
+						brval="$(($br / 1000))"
+						brsub="$((($br / 100) % 10))"
+						[ "$brsub" -gt 0 ] && brval="$brval.$brsub"
+						[ -n "$brstr" ] && brstr="$brstr,"
+						brstr="$brstr$brval"
+					done
+				}
+
+				local mcval=""
+				[ -n "$mcast_rate" ] && {
+					mcval="$(($mcast_rate / 1000))"
+					mcsub="$(( ($mcast_rate / 100) % 10 ))"
+					[ "$mcsub" -gt 0 ] && mcval="$mcval.$mcsub"
+				}
+
+				iw dev "$ifname" ibss join "$ssid" $freq $htmode \
+					${fixed:+fixed-freq} $bssid \
+					${beacon_int:+beacon-interval $beacon_int} \
+					${brstr:+basic-rates $brstr} \
+					${mcval:+mcast-rate $mcval} \
+					${keyspec:+keys $keyspec}
+			;;
+			mesh)
+				mp_list="mesh_retry_timeout mesh_confirm_timeout mesh_holding_timeout mesh_max_peer_links
+					mesh_max_retries mesh_ttl mesh_element_ttl mesh_auto_open_plinks mesh_hwmp_max_preq_retries
+					mesh_path_refresh_time mesh_min_discovery_timeout mesh_hwmp_active_path_timeout
+					mesh_hwmp_preq_min_interval mesh_hwmp_net_diameter_traversal_time mesh_hwmp_rootmode
+					mesh_hwmp_rann_interval mesh_gate_announcements mesh_fwding mesh_sync_offset_max_neighor
+					mesh_rssi_threshold mesh_hwmp_active_path_to_root_timeout mesh_hwmp_root_interval
+					mesh_hwmp_confirmation_interval mesh_power_mode mesh_awake_window"
+				for mp in $mp_list
+				do
+					config_get mp_val "$vif" "$mp" ""
+					[ -n "$mp_val" ] && iw dev "$ifname" set mesh_param "$mp" "$mp_val"
+				done
+			;;
+			sta)
+				if eval "type wpa_supplicant_setup_vif" 2>/dev/null >/dev/null; then
+					wpa_supplicant_setup_vif "$vif" nl80211 "${hostapd_ctrl:+-H $hostapd_ctrl}" || {
+						echo "enable_mac80211($device): Failed to set up wpa_supplicant for interface $ifname" >&2
+						# make sure this wifi interface won't accidentally stay open without encryption
+						ifconfig "$ifname" down
+						continue
+					}
+				fi
+			;;
+		esac
+		[ "$mode" = "ap" ] || mac80211_start_vif "$vif" "$ifname"
 	done
 
 }
@@ -562,12 +609,21 @@ detect_mac80211() {
 		}
 		smartssid=""
 		iw phy "$dev" info | grep -q '2412 MHz' || { mode_band="a"; channel="36"; smartssid=5; }
+
+		if [ -x /usr/bin/readlink ]; then
+			path="$(readlink -f /sys/class/ieee80211/${dev}/device)"
+			path="${path##/sys/devices/}"
+			dev_id="	option path	'$path'"
+		else
+			dev_id="	option macaddr	$(cat /sys/class/ieee80211/${dev}/macaddress)"
+		fi
+
 		cat <<EOF
 config wifi-device  radio$devidx
 	option type     mac80211
 	option channel  ${channel}
-	option macaddr	$(cat /sys/class/ieee80211/${dev}/macaddress)
 	option hwmode	11${mode_11n}${mode_band}
+$dev_id
 $ht_capab
 	# REMOVE THIS LINE TO ENABLE WIFI:
 	option disabled 0

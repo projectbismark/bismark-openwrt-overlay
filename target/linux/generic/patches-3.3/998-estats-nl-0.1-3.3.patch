@@ -1,0 +1,2906 @@
+diff --git a/include/linux/tcp.h b/include/linux/tcp.h
+index 3c7ffdb..5283a6b 100644
+--- a/include/linux/tcp.h
++++ b/include/linux/tcp.h
+@@ -261,6 +261,9 @@ struct tcp_options_received {
+ 		cookie_in_always:1;
+ 	u8	num_sacks;	/* Number of SACK blocks		*/
+ 	u16	user_mss;	/* mss requested by user in ioctl	*/
++#ifdef CONFIG_TCP_ESTATS
++	u16	rec_mss;	/* MSS option received */
++#endif
+ 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
+ };
+ 
+@@ -296,6 +299,10 @@ static inline struct tcp_request_sock *tcp_rsk(const struct request_sock *req)
+ 	return (struct tcp_request_sock *)req;
+ }
+ 
++#ifdef CONFIG_TCP_ESTATS
++struct tcp_estats;
++#endif
++
+ struct tcp_sock {
+ 	/* inet_connection_sock has to be the first member of tcp_sock */
+ 	struct inet_connection_sock	inet_conn;
+@@ -472,6 +479,10 @@ struct tcp_sock {
+ 	 * contains related tcp_cookie_transactions fields.
+ 	 */
+ 	struct tcp_cookie_values  *cookie_values;
++
++#ifdef CONFIG_TCP_ESTATS
++	struct tcp_estats	*tcp_stats;
++#endif
+ };
+ 
+ static inline struct tcp_sock *tcp_sk(const struct sock *sk)
+diff --git a/include/net/tcp.h b/include/net/tcp.h
+index 2d80c29..89c7f5c 100644
+--- a/include/net/tcp.h
++++ b/include/net/tcp.h
+@@ -42,6 +42,7 @@
+ #include <net/tcp_states.h>
+ #include <net/inet_ecn.h>
+ #include <net/dst.h>
++#include <net/tcp_estats.h>
+ 
+ #include <linux/seq_file.h>
+ #include <linux/memcontrol.h>
+diff --git a/include/net/tcp_estats.h b/include/net/tcp_estats.h
+new file mode 100644
+index 0000000..be95e15
+--- /dev/null
++++ b/include/net/tcp_estats.h
+@@ -0,0 +1,291 @@
++/*
++ * include/net/tcp_estats.h
++ *
++ * Implementation of TCP ESTATS MIB (RFC 4898)
++ *
++ * Authors:
++ *   John Estabrook <jestabro@ncsa.illinois.edu>
++ *   John Heffner <jheffner@psc.edu>
++ *   Matt Mathis <mathis@psc.edu>
++ *   Jeff Semke <semke@psc.edu>
++ *
++ * The Web10Gig project.  See http://www.web10gig.org
++ *
++ * Copyright © 2011, Pittsburgh Supercomputing Center (PSC) and
++ * National Center for Supercomputing Applications (NCSA).
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++#ifndef _TCP_ESTATS_H
++#define _TCP_ESTATS_H
++
++#include <net/sock.h>
++#include <linux/tcp.h>
++#include <linux/idr.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
++
++enum tcp_estats_sndlim_states {
++	TCP_ESTATS_SNDLIM_NONE = -1,
++	TCP_ESTATS_SNDLIM_SENDER,
++	TCP_ESTATS_SNDLIM_CWND,
++	TCP_ESTATS_SNDLIM_RWIN,
++	TCP_ESTATS_SNDLIM_STARTUP,
++	TCP_ESTATS_SNDLIM_NSTATES	/* Keep at end */
++};
++
++enum tcp_estats_addrtype {
++	TCP_ESTATS_ADDRTYPE_IPV4 = 1,
++	TCP_ESTATS_ADDRTYPE_IPV6 = 2
++};
++
++#ifdef CONFIG_TCP_ESTATS
++#define TCP_ESTATS_CHECK(tp,expr) \
++	do { if ((tp)->tcp_stats) (expr); } while (0)
++#define TCP_ESTATS_VAR_INC(tp,var) \
++	TCP_ESTATS_CHECK(tp, ((tp)->tcp_stats->estats_vars.var)++)
++#define TCP_ESTATS_VAR_DEC(tp,var) \
++	TCP_ESTATS_CHECK(tp, ((tp)->tcp_stats->estats_vars.var)--)
++#define TCP_ESTATS_VAR_ADD(tp,var,val) \
++	TCP_ESTATS_CHECK(tp, ((tp)->tcp_stats->estats_vars.var) += (val))
++#define TCP_ESTATS_VAR_SET(tp,var,val) \
++	TCP_ESTATS_CHECK(tp, ((tp)->tcp_stats->estats_vars.var) = (val))
++#define TCP_ESTATS_UPDATE(tp,func) \
++	TCP_ESTATS_CHECK(tp, func)
++
++/*
++ * Variables that can be read and written directly.
++ *
++ * Contains all variables from RFC 4898. Commented fields are
++ * either not implemented (only ElapsedSecs, ElapsedMicroSecs,
++ * StartTimeStamp remain unimplemented in this release) or have
++ * handlers and do not need struct storage.
++ */
++struct tcp_estats_directs {
++	/* Connection table */
++	u32			LocalAddressType;
++	struct { u8 data[17]; }	LocalAddress;
++	struct { u8 data[17]; }	RemAddress;
++	u16			LocalPort;
++	u16			RemPort;
++
++	/* Perf table */
++	u32		SegsOut;
++	u32		DataSegsOut;
++	u64		DataOctetsOut;
++	u32		SegsRetrans;
++	u32		OctetsRetrans;
++	u32		SegsIn;
++	u32		DataSegsIn;
++	u64		DataOctetsIn;
++	/*		ElapsedSecs */
++	/*		ElapsedMicroSecs */
++	/*		StartTimeStamp */
++	/*		CurMSS */
++	/*		PipeSize */
++	u32		MaxPipeSize;
++	/*		SmoothedRTT */
++	/*		CurRTO */
++	u32		CongSignals;
++	/*		CurCwnd */
++	/*		CurSsthresh */
++	u32		Timeouts;
++	/*		CurRwinSent */
++	u32		MaxRwinSent;
++	u32		ZeroRwinSent;
++	/*		CurRwinRcvd */
++	u32		MaxRwinRcvd;
++	u32		ZeroRwinRcvd;
++	/*		SndLimTransRwin */
++	/*		SndLimTransCwnd */
++	/*		SndLimTransSnd */
++	/*		SndLimTimeRwin */
++	/*		SndLimTimeCwnd */
++	/*		SndLimTimeSnd */
++	u32		snd_lim_trans[TCP_ESTATS_SNDLIM_NSTATES];
++	u32		snd_lim_time[TCP_ESTATS_SNDLIM_NSTATES];
++	
++	/* Path table */
++	/*		RetranThresh */
++	u32		NonRecovDAEpisodes;
++	u32		SumOctetsReordered;
++	u32		NonRecovDA;
++	u32		SampleRTT;
++	/*		RTTVar */
++	u32		MaxRTT;
++	u32		MinRTT;
++	u64		SumRTT;
++	u32		CountRTT;
++	u32		MaxRTO;
++	u32		MinRTO;
++	u8		IpTtl;
++	u8		IpTosIn;
++	/*		IpTosOut */
++	u32		PreCongSumCwnd;
++	u32		PreCongSumRTT;
++	u32		PostCongSumRTT;
++	u32		PostCongCountRTT;
++	u32		ECNsignals;
++	u32		DupAckEpisodes;
++	/*		RcvRTT */
++	u32		DupAcksOut;
++	u32		CERcvd;
++	u32		ECESent;
++	
++	/* Stack table */
++	u32		ActiveOpen;
++	/*		MSSSent */
++	/* 		MSSRcvd */
++	/*		WinScaleSent */
++	/*		WinScaleRcvd */
++	/*		TimeStamps */
++	/*		ECN */
++	/*		WillSendSACK */
++	/*		WillUseSACK */
++	/*		State */
++	/*		Nagle */
++	u32		MaxSsCwnd;
++	u32		MaxCaCwnd;
++	u32		MaxSsthresh;
++	u32		MinSsthresh;
++	/*		InRecovery */
++	u32		DupAcksIn;
++	u32		SpuriousFrDetected;
++	u32		SpuriousRtoDetected;
++	u32		SoftErrors;
++	u32		SoftErrorReason;
++	u32		SlowStart;
++	u32		CongAvoid;
++	u32		OtherReductions;
++	u32		CongOverCount;
++	u32		FastRetran;
++	u32		SubsequentTimeouts;
++	/*		CurTimeoutCount */
++	u32		AbruptTimeouts;
++	u32		SACKsRcvd;
++	u32		SACKBlocksRcvd;
++	u32		SendStall;
++	u32		DSACKDups;
++	u32		MaxMSS;
++	u32		MinMSS;
++	u32		SndInitial;
++	u32		RecInitial;
++	u32		CurRetxQueue;
++	u32		MaxRetxQueue;
++	/*		CurReasmQueue */
++	u32		MaxReasmQueue;
++
++	/* App table */
++	/*		SndUna */
++	/*		SndNxt */
++	u32		SndMax;
++	u64		ThruOctetsAcked;
++	/*		RcvNxt */
++	u64		ThruOctetsReceived;
++	/*		CurAppWQueue */
++	u32		MaxAppWQueue;
++	/*		CurAppRQueue */
++	u32		MaxAppRQueue;
++	
++	/* Tune table */
++	/*		LimCwnd */
++	/*		LimSsthresh */
++	/*		LimRwin */
++	/*		LimMSS */
++	
++	/* Extras */
++	u32		OtherReductionsCV;
++	u32		OtherReductionsCM;
++};
++
++struct tcp_estats {
++        int                             tcpe_cid; // idr map id
++
++	struct sock			*estats_sk;
++
++	atomic_t			estats_users;
++
++	int				estats_limstate;
++	ktime_t				estats_limstate_ts;
++	ktime_t				estats_start_ts;
++	ktime_t				estats_current_ts;
++	struct timeval			estats_start_tv;
++
++        int                             queued;
++        struct work_struct              create_notify;
++        struct work_struct              establish_notify;
++        struct delayed_work             destroy_notify;
++
++	struct tcp_estats_directs	estats_vars;
++};
++
++extern struct idr tcp_estats_idr;
++
++extern int tcp_estats_wq_enabled;
++extern struct workqueue_struct *tcp_estats_wq;
++extern void (*create_notify_func)(struct work_struct *work);
++extern void (*establish_notify_func)(struct work_struct *work);
++extern void (*destroy_notify_func)(struct work_struct *work);
++
++extern unsigned long persist_delay;
++extern spinlock_t tcp_estats_idr_lock;
++
++/* For the TCP code */
++extern int  tcp_estats_create(struct sock *sk, enum tcp_estats_addrtype t);
++extern void tcp_estats_destroy(struct sock *sk);
++extern void tcp_estats_free(struct tcp_estats *stats);
++extern void tcp_estats_establish(struct sock *sk);
++
++extern void tcp_estats_update_snd_nxt(struct tcp_sock *tp);
++extern void tcp_estats_update_acked(struct tcp_sock *tp, u32 ack);
++extern void tcp_estats_update_rtt(struct sock *sk, unsigned long rtt_sample);
++extern void tcp_estats_update_timeout(struct sock *sk);
++extern void tcp_estats_update_mss(struct tcp_sock *tp);
++extern void tcp_estats_update_rwin_rcvd(struct tcp_sock *tp);
++extern void tcp_estats_update_sndlim(struct tcp_sock *tp, int why);
++extern void tcp_estats_update_rcvd(struct tcp_sock *tp, u32 seq);
++extern void tcp_estats_update_rwin_sent(struct tcp_sock *tp);
++extern void tcp_estats_update_congestion(struct tcp_sock *tp);
++extern void tcp_estats_update_post_congestion(struct tcp_sock *tp);
++extern void tcp_estats_update_segsend(struct sock *sk, int len, int pcount,
++                                      u32 seq, u32 end_seq, int flags);
++extern void tcp_estats_update_segrecv(struct tcp_sock *tp, struct sk_buff *skb);
++extern void tcp_estats_update_finish_segrecv(struct tcp_sock *tp);
++extern void tcp_estats_update_writeq(struct sock *sk);
++extern void tcp_estats_update_recvq(struct sock *sk);
++
++extern void tcp_estats_init(void);
++
++static inline void tcp_estats_use(struct tcp_estats *stats)
++{
++	atomic_inc(&stats->estats_users);
++}
++
++static inline void tcp_estats_unuse(struct tcp_estats *stats)
++{
++	if (atomic_dec_and_test(&stats->estats_users))
++		tcp_estats_free(stats);
++}
++
++#else /* !CONFIG_TCP_ESTATS */
++
++#define tcp_estats_enabled	(0)
++
++#define TCP_ESTATS_VAR_INC(tp,var)	do {} while (0)
++#define TCP_ESTATS_VAR_DEC(tp,var)	do {} while (0)
++#define TCP_ESTATS_VAR_SET(tp,var,val)	do {} while (0)
++#define TCP_ESTATS_VAR_ADD(tp,var,val)	do {} while (0)
++#define TCP_ESTATS_UPDATE(tp,func)	do {} while (0)
++
++static inline void tcp_estats_init(void) { }
++static inline void tcp_estats_establish(struct sock *sk) { }
++static inline void tcp_estats_create(struct sock *sk, enum tcp_estats_addrtype t) { }
++static inline void tcp_estats_destroy(struct sock *sk) { }
++
++#endif /* CONFIG_TCP_ESTATS */
++
++#endif /* _TCP_ESTATS_H */
+diff --git a/include/net/tcp_estats_mib_var.h b/include/net/tcp_estats_mib_var.h
+new file mode 100644
+index 0000000..b02b388
+--- /dev/null
++++ b/include/net/tcp_estats_mib_var.h
+@@ -0,0 +1,268 @@
++#ifndef _TCP_ESTATS_MIB_VAR_H_
++#define _TCP_ESTATS_MIB_VAR_H_
++
++#ifdef __KERNEL__
++#include <net/sock.h>
++#include <linux/tcp.h>
++#include <net/tcp.h>
++#include <net/tcp_estats.h>
++#else
++#include <linux/types.h>
++#include <inttypes.h>
++#endif
++
++union estats_val {
++        __u64 o;
++        __u32 t;
++        __s32 s;
++        __u16 w;
++        __u8  b;
++};
++
++enum MIB_TABLE {
++        PERF_TABLE,
++        PATH_TABLE,
++        STACK_TABLE,
++        APP_TABLE,
++        TUNE_TABLE,
++        __MAX_TABLE
++};
++#define MAX_TABLE __MAX_TABLE
++
++extern int max_index[];
++
++extern union estats_val   perf_val_array[];
++extern union estats_val   path_val_array[];
++extern union estats_val  stack_val_array[];
++extern union estats_val    app_val_array[];
++extern union estats_val   tune_val_array[];
++
++extern union estats_val *estats_val_array[MAX_TABLE];
++
++/* The official MIB states are enumerated differently than Linux's. */
++enum tcp_estats_states {
++	TCP_ESTATS_STATE_CLOSED = 1,
++	TCP_ESTATS_STATE_LISTEN,
++	TCP_ESTATS_STATE_SYNSENT,
++	TCP_ESTATS_STATE_SYNRECEIVED,
++	TCP_ESTATS_STATE_ESTABLISHED,
++	TCP_ESTATS_STATE_FINWAIT1,
++	TCP_ESTATS_STATE_FINWAIT2,
++	TCP_ESTATS_STATE_CLOSEWAIT,
++	TCP_ESTATS_STATE_LASTACK,
++	TCP_ESTATS_STATE_CLOSING,
++	TCP_ESTATS_STATE_TIMEWAIT,
++	TCP_ESTATS_STATE_DELETECB
++};
++
++struct tcp_estats_connection_spec {
++    char rem_addr[17];
++    char local_addr[17];
++    uint16_t rem_port;
++    uint16_t local_port;
++};
++
++enum TCP_ESTATS_TYPE {
++        TCP_ESTATS_UNSIGNED64,
++        TCP_ESTATS_UNSIGNED32,
++        TCP_ESTATS_SIGNED32,
++        TCP_ESTATS_UNSIGNED16,
++        TCP_ESTATS_UNSIGNED8,
++};
++
++struct tcp_estats_var;
++typedef void (*estats_rwfunc_t)(void *buf, struct tcp_estats *stats,
++                                struct tcp_estats_var *vp);
++
++struct tcp_estats_var {
++	char		*name;
++	u32		type;
++
++	estats_rwfunc_t	read;
++	unsigned long	read_data;
++
++	estats_rwfunc_t	write;
++	unsigned long	write_data;
++};
++
++extern struct tcp_estats_var   perf_var_array[];
++extern struct tcp_estats_var   path_var_array[];
++extern struct tcp_estats_var  stack_var_array[];
++extern struct tcp_estats_var    app_var_array[];
++extern struct tcp_estats_var   tune_var_array[];
++
++extern struct tcp_estats_var *estats_var_array[];
++
++static inline void read_tcp_estats(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++        vp->read(buf, stats, vp);
++}
++
++static inline int tcp_estats_var_len(struct tcp_estats_var *vp)
++{
++	switch (vp->type) {
++        case TCP_ESTATS_UNSIGNED64:
++                return 8;
++        case TCP_ESTATS_UNSIGNED32:
++                return 4;
++        case TCP_ESTATS_SIGNED32:
++                return 4;
++        case TCP_ESTATS_UNSIGNED16:
++                return 2;
++        case TCP_ESTATS_UNSIGNED8:
++                return 1;
++	}
++	
++	printk(KERN_WARNING
++	       "TCP ESTATS: Adding variable of unknown type %d.\n", vp->type);
++	return 0;
++}
++
++void tcp_estats_read_connection_spec(struct tcp_estats_connection_spec *,
++        struct tcp_estats *);
++
++typedef enum ESTATS_PERF_INDEX {
++	SEGSOUT                 = 0,
++	DATASEGSOUT,
++	DATAOCTETSOUT,
++	HCDATAOCTETSOUT, 
++	SEGSRETRANS,
++	OCTETSRETRANS,
++	SEGSIN,
++	DATASEGSIN,
++	DATAOCTETSIN,
++	HCDATAOCTETSIN, 
++	ELAPSEDSECS,
++	ELAPSEDMICROSECS,
++	STARTTIMESTAMP,
++	CURMSS,
++	PIPESIZE,
++	MAXPIPESIZE,
++	SMOOTHEDRTT,
++	CURRTO,
++	CONGSIGNALS,
++	CURCWND,
++	CURSSTHRESH,
++	TIMEOUTS,
++	CURRWINSENT,
++	MAXRWINSENT,
++	ZERORWINSENT,
++	CURRWINRCVD,
++	MAXRWINRCVD,
++	ZERORWINRCVD,
++	SNDLIMTRANSRWIN,
++	SNDLIMTRANSCWND,
++	SNDLIMTRANSSND,
++	SNDLIMTIMERWIN,
++	SNDLIMTIMECWND,
++	SNDLIMTIMESND,
++        __PERF_INDEX_MAX
++} ESTATS_PERF_INDEX;
++#define PERF_INDEX_MAX __PERF_INDEX_MAX
++
++typedef enum ESTATS_PATH_INDEX {
++        RETRANTHRESH,
++        NONRECOVDAEPISODES,
++        SUMOCTETSREORDERED,
++        NONRECOVDA,
++        SAMPLERTT,
++        RTTVAR,
++        MAXRTT,
++        MINRTT,
++        SUMRTT,
++        HCSUMRTT,
++        COUNTRTT,
++        MAXRTO,
++        MINRTO,
++        IPTTL,
++        IPTOSIN,
++        IPTOSOUT,
++        PRECONGSUMCWND,
++        PRECONGSUMRTT,
++        POSTCONGSUMRTT,
++        POSTCONGCOUNTRTT,
++        ECNSIGNALS,
++        DUPACKEPISODES,
++        RCVRTT,
++        DUPACKSOUT,
++        CERCVD,
++        ECESENT,
++        __PATH_INDEX_MAX
++} ESTATS_PATH_INDEX;
++#define PATH_INDEX_MAX __PATH_INDEX_MAX
++
++typedef enum ESTATS_STACK_INDEX {
++	ACTIVEOPEN,
++	MSSSENT,
++	MSSRCVD,
++	WINSCALESENT,
++	WINSCALERCVD,
++	TIMESTAMPS,
++	ECN,
++	WILLSENDSACK,
++	WILLUSESACK,
++	STATE,
++	NAGLE,
++	MAXSSCWND,
++	MAXCACWND,
++	MAXSSTHRESH,
++	MINSSTHRESH,
++	INRECOVERY,
++	DUPACKSIN,
++	SPURIOUSFRDETECTED,
++	SPURIOUSRTODETECTED,
++	SOFTERRORS,
++	SOFTERRORREASON,
++	SLOWSTART,
++	CONGAVOID,
++	OTHERREDUCTIONS,
++	CONGOVERCOUNT,
++	FASTRETRAN,
++	SUBSEQUENTTIMEOUTS,
++	CURTIMEOUTCOUNT,
++	ABRUPTTIMEOUTS,
++	SACKSRCVD,
++	SACKBLOCKSRCVD,
++	SENDSTALL,
++	DSACKDUPS,
++	MAXMSS,
++	MINMSS,
++	SNDINITIAL,
++	RECINITIAL,
++	CURRETXQUEUE,
++	MAXRETXQUEUE,
++	CURREASMQUEUE,
++	MAXREASMQUEUE,
++        __STACK_INDEX_MAX
++} ESTATS_STACK_INDEX;
++#define STACK_INDEX_MAX __STACK_INDEX_MAX
++
++typedef enum ESTATS_APP_INDEX {
++        SNDUNA,
++        SNDNXT,
++        SNDMAX,
++        THRUOCTETSACKED,
++        HCTHRUOCTETSACKED, 
++        RCVNXT,
++        THRUOCTETSRECEIVED,
++        HCTHRUOCTETSRECEIVED, 
++        CURAPPWQUEUE,
++        MAXAPPWQUEUE,
++        CURAPPRQUEUE,
++        MAXAPPRQUEUE,
++        __APP_INDEX_MAX
++} ESTATS_APP_INDEX;
++#define APP_INDEX_MAX __APP_INDEX_MAX
++
++typedef enum ESTATS_TUNE_INDEX { 
++        LIMCWND,
++        LIMSSTHRESH,
++        LIMRWIN,
++        LIMMSS,
++        __TUNE_INDEX_MAX
++} ESTATS_TUNE_INDEX;
++#define TUNE_INDEX_MAX __TUNE_INDEX_MAX
++
++
++#endif /* _TCP_ESTATS_MIB_VAR_H_ */
+diff --git a/include/net/tcp_estats_nl.h b/include/net/tcp_estats_nl.h
+new file mode 100644
+index 0000000..5f4ecfa
+--- /dev/null
++++ b/include/net/tcp_estats_nl.h
+@@ -0,0 +1,60 @@
++#ifndef _TCP_ESTATS_NL_H_
++#define _TCP_ESTATS_NL_H_
++
++#define DEFAULT_PERF_MASK  0x3ffffffffUL
++#define DEFAULT_PATH_MASK  0x3ffffffUL
++#define DEFAULT_STACK_MASK 0x1ffffffffffUL
++#define DEFAULT_APP_MASK   0xfffUL
++#define DEFAULT_TUNE_MASK  0xfUL
++
++enum nl_estats_msg_types {
++        TCPE_CMD_LIST_CONNS,
++        TCPE_CMD_READ_CONN, 
++        TCPE_CMD_READ_ALL, 
++        TCPE_CMD_SET_MASK,
++        TCPE_CMD_SET_PERSIST,
++        TCPE_CMD_WRITE_CONN,
++        NLE_MSG_MAX
++};
++
++enum nl_estats_attr {
++        NLE_ATTR_UNSPEC,
++        NLE_ATTR_PERF,
++        NLE_ATTR_PATH,
++        NLE_ATTR_STACK,
++        NLE_ATTR_APP,
++        NLE_ATTR_TUNE,
++        NLE_ATTR_PERF_MASK,
++        NLE_ATTR_PATH_MASK,
++        NLE_ATTR_STACK_MASK,
++        NLE_ATTR_APP_MASK,
++        NLE_ATTR_TUNE_MASK,
++        NLE_ATTR_MASK,
++        NLE_ATTR_4TUPLE,
++        __NLE_ATTR_MAX
++};
++#define NLE_ATTR_MAX (__NLE_ATTR_MAX - 1)
++
++enum neattr_4tuple {
++        NEA_UNSPEC,
++        NEA_REM_ADDR,
++        NEA_REM_PORT,
++        NEA_LOCAL_ADDR,
++        NEA_LOCAL_PORT,
++        NEA_CID,
++        __NEA_4TUPLE_MAX
++};
++#define NEA_4TUPLE_MAX (__NEA_4TUPLE_MAX - 1)
++
++enum neattr_mask {
++        NEA_UNSPEC_MASK,
++        NEA_PERF_MASK,
++        NEA_PATH_MASK,
++        NEA_STACK_MASK,
++        NEA_APP_MASK,
++        NEA_TUNE_MASK,
++        __NEA_MASK_MAX
++};
++#define NEA_MASK_MAX (__NEA_MASK_MAX - 1)
++
++#endif /* _TCP_ESTATS_NL_H_ */
+diff --git a/net/ipv4/Kconfig b/net/ipv4/Kconfig
+index d183262..f87cd53 100644
+--- a/net/ipv4/Kconfig
++++ b/net/ipv4/Kconfig
+@@ -630,3 +630,24 @@ config TCP_MD5SIG
+ 	  on the Internet.
+ 
+ 	  If unsure, say N.
++
++config TCP_ESTATS
++	bool "TCP: Extended TCP statistics (TCP ESTATS) MIB"
++	---help---
++
++	  Support for the TCP extended stastics MIB, RFC 4898.
++	  (see http://www.web10g.org)
++
++if TCP_ESTATS
++
++config TCP_ESTATS_NETLINK
++        tristate "TCP: ESTATS netlink module"
++        depends on TCP_ESTATS
++        default m
++        ---help---
++          Netlink module exposing TCP Extended metrics.
++          (See http://www.web10g.org)
++
++endif
++
++
+diff --git a/net/ipv4/Makefile b/net/ipv4/Makefile
+index ff75d3b..9e761e5 100644
+--- a/net/ipv4/Makefile
++++ b/net/ipv4/Makefile
+@@ -11,7 +11,7 @@ obj-y     := route.o inetpeer.o protocol.o \
+ 	     datagram.o raw.o udp.o udplite.o \
+ 	     arp.o icmp.o devinet.o af_inet.o  igmp.o \
+ 	     fib_frontend.o fib_semantics.o fib_trie.o \
+-	     inet_fragment.o ping.o
++	     inet_fragment.o ping.o tcp_estats_mib_var.o
+ 
+ obj-$(CONFIG_SYSCTL) += sysctl_net_ipv4.o
+ obj-$(CONFIG_PROC_FS) += proc.o
+@@ -31,6 +31,8 @@ obj-$(CONFIG_INET_TUNNEL) += tunnel4.o
+ obj-$(CONFIG_INET_XFRM_MODE_TRANSPORT) += xfrm4_mode_transport.o
+ obj-$(CONFIG_INET_XFRM_MODE_TUNNEL) += xfrm4_mode_tunnel.o
+ obj-$(CONFIG_IP_PNP) += ipconfig.o
++obj-$(CONFIG_TCP_ESTATS) += tcp_estats.o
++obj-$(CONFIG_TCP_ESTATS_NETLINK) += tcp_estats_nl.o
+ obj-$(CONFIG_NETFILTER)	+= netfilter.o netfilter/
+ obj-$(CONFIG_INET_DIAG) += inet_diag.o 
+ obj-$(CONFIG_INET_TCP_DIAG) += tcp_diag.o
+diff --git a/net/ipv4/tcp.c b/net/ipv4/tcp.c
+index 22ef5f9..998ddde 100644
+--- a/net/ipv4/tcp.c
++++ b/net/ipv4/tcp.c
+@@ -1100,8 +1100,12 @@ new_segment:
+ wait_for_sndbuf:
+ 			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+ wait_for_memory:
+-			if (copied)
++			if (copied) {
+ 				tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
++				TCP_ESTATS_UPDATE(tp, tcp_estats_update_writeq(sk));
++			}
++
++
+ 
+ 			if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
+ 				goto do_error;
+@@ -1497,6 +1501,8 @@ int tcp_recvmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+ 			     *seq, TCP_SKB_CB(skb)->seq, tp->rcv_nxt, flags);
+ 		}
+ 
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_recvq(sk));
++
+ 		/* Well, if we have backlog, try to process it now yet. */
+ 
+ 		if (copied >= target && !sk->sk_backlog.tail)
+@@ -3316,6 +3322,7 @@ void __init tcp_init(void)
+ 	       tcp_hashinfo.ehash_mask + 1, tcp_hashinfo.bhash_size);
+ 
+ 	tcp_register_congestion_control(&tcp_reno);
++	tcp_estats_init();
+ 
+ 	memset(&tcp_secret_one.secrets[0], 0, sizeof(tcp_secret_one.secrets));
+ 	memset(&tcp_secret_two.secrets[0], 0, sizeof(tcp_secret_two.secrets));
+diff --git a/net/ipv4/tcp_cong.c b/net/ipv4/tcp_cong.c
+index fc6d475..80e44bc 100644
+--- a/net/ipv4/tcp_cong.c
++++ b/net/ipv4/tcp_cong.c
+@@ -366,11 +366,14 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 		return;
+ 
+ 	/* In "safe" area, increase. */
+-	if (tp->snd_cwnd <= tp->snd_ssthresh)
++	if (tp->snd_cwnd <= tp->snd_ssthresh) {
+ 		tcp_slow_start(tp);
++		TCP_ESTATS_VAR_INC(tp, SlowStart);
++		return;
++	}
+ 
+ 	/* In dangerous area, increase slowly. */
+-	else if (sysctl_tcp_abc) {
++	if (sysctl_tcp_abc) {
+ 		/* RFC3465: Appropriate Byte Count
+ 		 * increase once for each full cwnd acked
+ 		 */
+@@ -382,6 +385,7 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 in_flight)
+ 	} else {
+ 		tcp_cong_avoid_ai(tp, tp->snd_cwnd);
+ 	}
++	TCP_ESTATS_VAR_INC(tp, CongAvoid);
+ }
+ EXPORT_SYMBOL_GPL(tcp_reno_cong_avoid);
+ 
+diff --git a/net/ipv4/tcp_estats.c b/net/ipv4/tcp_estats.c
+new file mode 100644
+index 0000000..26d53d8
+--- /dev/null
++++ b/net/ipv4/tcp_estats.c
+@@ -0,0 +1,536 @@
++/*
++ * net/ipv4/tcp_estats.c
++ *
++ * Implementation of TCP ESTATS MIB (RFC 4898)
++ *
++ * Authors:
++ *   John Estabrook <jestabro@ncsa.illinois.edu>
++ *   John Heffner <jheffner@psc.edu>
++ *   Matt Mathis <mathis@psc.edu>
++ *   Jeff Semke <semke@psc.edu>
++ *
++ * The Web10Gig project.  See http://www.web10gig.org
++ *
++ * Copyright © 2011, Pittsburgh Supercomputing Center (PSC) and
++ * National Center for Supercomputing Applications (NCSA).
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version
++ * 2 of the License, or (at your option) any later version.
++ *
++ */
++
++#include <linux/export.h>
++#include <linux/types.h>
++#include <linux/socket.h>
++#include <linux/string.h>
++#include <net/tcp_estats.h>
++#include <net/tcp.h>
++#include <asm/atomic.h>
++#include <asm/byteorder.h>
++
++#define ESTATS_INF32	0xffffffff
++
++int tcp_estats_enabled __read_mostly = 0;
++
++struct idr tcp_estats_idr;
++static int next_id = 1;
++DEFINE_SPINLOCK(tcp_estats_idr_lock);
++
++int tcp_estats_wq_enabled __read_mostly = 0;
++struct workqueue_struct *tcp_estats_wq = NULL;
++void (*create_notify_func)(struct work_struct *work);
++void (*establish_notify_func)(struct work_struct *work);
++void (*destroy_notify_func)(struct work_struct *work);
++unsigned long persist_delay = 0;
++
++EXPORT_SYMBOL(tcp_estats_idr);
++EXPORT_SYMBOL(tcp_estats_idr_lock);
++EXPORT_SYMBOL(tcp_estats_wq_enabled);
++EXPORT_SYMBOL(tcp_estats_wq);
++EXPORT_SYMBOL(create_notify_func);
++EXPORT_SYMBOL(establish_notify_func);
++EXPORT_SYMBOL(destroy_notify_func);
++EXPORT_SYMBOL(persist_delay);
++
++/* Called whenever a TCP/IPv4 sock is created.
++ * net/ipv4/tcp_ipv4.c: tcp_v4_syn_recv_sock,
++ *			tcp_v4_init_sock
++ * Allocates a stats structure and initializes values.
++ */
++int tcp_estats_create(struct sock *sk, enum tcp_estats_addrtype addrtype)
++{
++	struct tcp_estats *stats;
++	struct tcp_estats_directs *vars;
++	struct tcp_sock *tp = tcp_sk(sk);
++        int ret;
++
++	if (!tcp_estats_enabled) {
++		stats = NULL;
++		return -1;
++	}
++
++	stats = kzalloc(sizeof(struct tcp_estats), gfp_any());
++	if (!stats)
++		return -ENOMEM;
++
++	tp->tcp_stats = stats;
++	vars = &stats->estats_vars;
++
++        stats->tcpe_cid = -1;
++        stats->queued = 0;
++
++	stats->estats_vars.LocalAddressType = addrtype;
++
++	sock_hold(sk);
++	stats->estats_sk = sk;
++	atomic_set(&stats->estats_users, 0);
++
++	stats->estats_limstate = TCP_ESTATS_SNDLIM_STARTUP;
++	stats->estats_start_ts = stats->estats_limstate_ts =
++	    stats->estats_current_ts = ktime_get();
++	do_gettimeofday(&stats->estats_start_tv);
++
++	vars->ActiveOpen = !in_interrupt();
++
++	vars->SndMax = tp->snd_nxt;
++	vars->SndInitial = tp->snd_nxt;
++
++	vars->MinRTT = vars->MinRTO = vars->MinMSS = vars->MinSsthresh =
++	    ESTATS_INF32;
++
++	tcp_estats_use(stats);
++
++        if (tcp_estats_wq_enabled) {
++
++                tcp_estats_use(stats);
++                stats->queued = 1;
++                stats->tcpe_cid = 0;
++                INIT_WORK(&stats->create_notify, create_notify_func);
++                ret = queue_work(tcp_estats_wq, &stats->create_notify);
++        }
++
++	return 0;
++}
++
++void tcp_estats_destroy(struct sock *sk)
++{
++	struct tcp_estats *stats = tcp_sk(sk)->tcp_stats;
++
++	if (stats == NULL)
++		return;
++
++	/* Attribute final sndlim time. */
++	tcp_estats_update_sndlim(tcp_sk(stats->estats_sk),
++				 stats->estats_limstate);
++
++        if (tcp_estats_wq_enabled && stats->queued) {
++                INIT_DELAYED_WORK(&stats->destroy_notify,
++                        destroy_notify_func);
++                queue_delayed_work(tcp_estats_wq, &stats->destroy_notify,
++                        persist_delay);
++
++        }
++	tcp_estats_unuse(stats);
++}
++
++/* Do not call directly.  Called from tcp_estats_unuse(). */
++void tcp_estats_free(struct tcp_estats *stats)
++{
++	sock_put(stats->estats_sk);
++	kfree(stats);
++}
++EXPORT_SYMBOL(tcp_estats_free);
++
++/* Called when a connection enters the ESTABLISHED state, and has all its
++ * state initialized.
++ * net/ipv4/tcp_input.c: tcp_rcv_state_process,
++ *			 tcp_rcv_synsent_state_process
++ * Here we link the statistics structure in so it is visible in the /proc
++ * fs, and do some final init.
++ */
++void tcp_estats_establish(struct sock *sk)
++{
++	struct inet_sock *inet = inet_sk(sk);
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct tcp_estats *stats = tp->tcp_stats;
++	struct tcp_estats_directs *vars = &stats->estats_vars;
++
++	if (stats == NULL)
++		return;
++
++	/* Let's set these here, since they can't change once the
++	 * connection is established.
++	 */
++	vars->LocalPort = inet->inet_num;
++	vars->RemPort = ntohs(inet->inet_dport);
++
++	if (vars->LocalAddressType == TCP_ESTATS_ADDRTYPE_IPV4) {
++		memcpy(&vars->LocalAddress, &inet->inet_rcv_saddr, 4);
++		memcpy(&vars->RemAddress, &inet->inet_daddr, 4);
++	}
++#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
++	else if (vars->LocalAddressType == TCP_ESTATS_ADDRTYPE_IPV6) {
++		memcpy(&vars->LocalAddress, &(inet6_sk(sk)->saddr), 16);
++		memcpy(&vars->RemAddress, &(inet6_sk(sk)->daddr), 16);
++	}
++#endif
++	else {
++		printk(KERN_ERR "TCP ESTATS: LocalAddressType not valid.\n");
++	}
++	((char *)&vars->LocalAddress)[16] = ((char *)&vars->RemAddress)[16] =
++	    vars->LocalAddressType;
++
++	tcp_estats_update_finish_segrecv(tp);
++	tcp_estats_update_rwin_rcvd(tp);
++	tcp_estats_update_rwin_sent(tp);
++
++	vars->RecInitial = tp->rcv_nxt;
++
++	tcp_estats_update_sndlim(tp, TCP_ESTATS_SNDLIM_SENDER);
++
++        if (tcp_estats_wq_enabled && stats->queued) {
++                INIT_WORK(&stats->establish_notify, establish_notify_func);
++                queue_work(tcp_estats_wq, &stats->establish_notify);
++        }
++}
++
++/*
++ * Statistics update functions
++ */
++
++void tcp_estats_update_snd_nxt(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++
++	if (after(tp->snd_nxt, stats->estats_vars.SndMax))
++		stats->estats_vars.SndMax = tp->snd_nxt;
++}
++
++void tcp_estats_update_acked(struct tcp_sock *tp, u32 ack)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++
++	stats->estats_vars.ThruOctetsAcked += ack - tp->snd_una;
++}
++
++void tcp_estats_update_rtt(struct sock *sk, unsigned long rtt_sample)
++{
++	struct tcp_estats *stats = tcp_sk(sk)->tcp_stats;
++	unsigned long rtt_sample_msec = rtt_sample * 1000 / HZ;
++	u32 rto;
++
++	stats->estats_vars.SampleRTT = rtt_sample_msec;
++
++	if (rtt_sample_msec > stats->estats_vars.MaxRTT)
++		stats->estats_vars.MaxRTT = rtt_sample_msec;
++	if (rtt_sample_msec < stats->estats_vars.MinRTT)
++		stats->estats_vars.MinRTT = rtt_sample_msec;
++
++	stats->estats_vars.CountRTT++;
++	stats->estats_vars.SumRTT += rtt_sample_msec;
++
++	rto = inet_csk(sk)->icsk_rto * 1000 / HZ;
++	if (rto > stats->estats_vars.MaxRTO)
++		stats->estats_vars.MaxRTO = rto;
++	if (rto < stats->estats_vars.MinRTO)
++		stats->estats_vars.MinRTO = rto;
++}
++
++void tcp_estats_update_timeout(struct sock *sk)
++{
++	struct tcp_estats *stats = tcp_sk(sk)->tcp_stats;
++
++	if (inet_csk(sk)->icsk_backoff)
++		stats->estats_vars.SubsequentTimeouts++;
++	else
++		stats->estats_vars.Timeouts++;
++	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Open)
++		stats->estats_vars.AbruptTimeouts++;
++}
++
++void tcp_estats_update_mss(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	int mss = tp->mss_cache;
++
++	if (mss > stats->estats_vars.MaxMSS)
++		stats->estats_vars.MaxMSS = mss;
++	if (mss < stats->estats_vars.MinMSS)
++		stats->estats_vars.MinMSS = mss;
++}
++
++void tcp_estats_update_finish_segrecv(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	struct tcp_estats_directs *vars = &stats->estats_vars;
++	u32 mss = tp->mss_cache;
++	u32 cwnd;
++	u32 ssthresh;
++	u32 pipe_size;
++
++	stats->estats_current_ts = ktime_get();
++
++	cwnd = tp->snd_cwnd * mss;
++	if (tp->snd_cwnd <= tp->snd_ssthresh) {
++		if (cwnd > vars->MaxSsCwnd)
++			vars->MaxSsCwnd = cwnd;
++	} else {
++		if (cwnd > vars->MaxCaCwnd)
++			vars->MaxCaCwnd = cwnd;
++	}
++
++	pipe_size = tcp_packets_in_flight(tp) * mss;
++	if (pipe_size > vars->MaxPipeSize)
++		vars->MaxPipeSize = pipe_size;
++
++	/* Discard initiail ssthresh set at infinity. */
++	if (tp->snd_ssthresh >= 0x7ffffff) {
++		return;
++	}
++	ssthresh = tp->snd_ssthresh * tp->mss_cache;
++	if (ssthresh > vars->MaxSsthresh)
++		vars->MaxSsthresh = ssthresh;
++	if (ssthresh < vars->MinSsthresh)
++		vars->MinSsthresh = ssthresh;
++}
++
++void tcp_estats_update_rwin_rcvd(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	u32 win = tp->snd_wnd;
++
++	if (win > stats->estats_vars.MaxRwinRcvd)
++		stats->estats_vars.MaxRwinRcvd = win;
++	if (win == 0)
++		stats->estats_vars.ZeroRwinRcvd++;
++}
++
++void tcp_estats_update_rwin_sent(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	u32 win = tp->rcv_wnd;
++
++	if (win > stats->estats_vars.MaxRwinSent)
++		stats->estats_vars.MaxRwinSent = win;
++	if (win == 0)
++		stats->estats_vars.ZeroRwinSent++;
++}
++
++void tcp_estats_update_sndlim(struct tcp_sock *tp, int why)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	ktime_t now;
++
++	if (why < 0) {
++		printk(KERN_ERR "tcp_estats_update_sndlim: BUG: why < 0\n");
++		return;
++	}
++
++	now = ktime_get();
++	stats->estats_vars.snd_lim_time[stats->estats_limstate]
++	    += ktime_to_ns(ktime_sub(now, stats->estats_limstate_ts));
++
++	stats->estats_limstate_ts = now;
++	if (stats->estats_limstate != why) {
++		stats->estats_limstate = why;
++		stats->estats_vars.snd_lim_trans[why]++;
++	}
++}
++
++void tcp_estats_update_congestion(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++
++	stats->estats_vars.CongSignals++;
++	stats->estats_vars.PreCongSumCwnd += tp->snd_cwnd * tp->mss_cache;
++	stats->estats_vars.PreCongSumRTT += stats->estats_vars.SampleRTT;
++}
++
++void tcp_estats_update_post_congestion(struct tcp_sock *tp)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++	
++	stats->estats_vars.PostCongCountRTT++;
++	stats->estats_vars.PostCongSumRTT += stats->estats_vars.SampleRTT;
++}
++
++void tcp_estats_update_segsend(struct sock *sk, int len, int pcount,
++			       u32 seq, u32 end_seq, int flags)
++{
++	struct tcp_estats *stats = tcp_sk(sk)->tcp_stats;
++
++	stats->estats_current_ts = ktime_get();
++
++	/* We know we're sending a segment. */
++	stats->estats_vars.SegsOut += pcount;
++
++	/* A pure ACK contains no data; everything else is data. */
++	if (len > 0) {
++		stats->estats_vars.DataSegsOut += pcount;
++		stats->estats_vars.DataOctetsOut += len;
++	}
++
++	/* Check for retransmission. */
++	if (flags & TCPHDR_SYN) {
++		if (inet_csk(sk)->icsk_retransmits)
++			stats->estats_vars.SegsRetrans++;
++	} else if (before(seq, stats->estats_vars.SndMax)) {
++		stats->estats_vars.SegsRetrans += pcount;
++		stats->estats_vars.OctetsRetrans += end_seq - seq;
++	}
++}
++
++void tcp_estats_update_segrecv(struct tcp_sock *tp, struct sk_buff *skb)
++{
++	struct tcp_estats_directs *vars = &tp->tcp_stats->estats_vars;
++	struct tcphdr *th = tcp_hdr(skb);
++	struct iphdr *iph = ip_hdr(skb);
++
++	vars->SegsIn++;
++	if (skb->len == th->doff * 4) {
++		if (TCP_SKB_CB(skb)->ack_seq == tp->snd_una)
++			vars->DupAcksIn++;
++	} else {
++		vars->DataSegsIn++;
++		vars->DataOctetsIn += skb->len - th->doff * 4;
++	}
++
++	vars->IpTtl = iph->ttl;
++	vars->IpTosIn = iph->tos;
++}
++
++void tcp_estats_update_rcvd(struct tcp_sock *tp, u32 seq)
++{
++	struct tcp_estats *stats = tp->tcp_stats;
++
++	stats->estats_vars.ThruOctetsReceived += seq - tp->rcv_nxt;
++}
++
++void tcp_estats_update_writeq(struct sock *sk)
++{
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct tcp_estats_directs *vars = &tp->tcp_stats->estats_vars;
++	int len = tp->write_seq - vars->SndMax;
++
++	if (len > vars->MaxAppWQueue)
++		vars->MaxAppWQueue = len;
++}
++
++static inline u32 ofo_qlen(struct tcp_sock *tp)
++{
++	if (!skb_peek(&tp->out_of_order_queue))
++		return 0;
++	else
++		return TCP_SKB_CB(tp->out_of_order_queue.prev)->end_seq -
++		    TCP_SKB_CB(tp->out_of_order_queue.next)->seq;
++}
++
++void tcp_estats_update_recvq(struct sock *sk)
++{
++	struct tcp_sock *tp = tcp_sk(sk);
++	struct tcp_estats_directs *vars = &tp->tcp_stats->estats_vars;
++	u32 len1 = tp->rcv_nxt - tp->copied_seq;
++	u32 len2 = ofo_qlen(tp);
++
++	if (vars->MaxAppRQueue < len1)
++		vars->MaxAppRQueue = len1;
++
++	if (vars->MaxReasmQueue < len2)
++		vars->MaxReasmQueue = len2;
++}
++
++/*
++ * Manage connection ID table
++ */
++
++static int get_new_cid(struct tcp_estats *stats)
++{
++      int err;
++      int id_cid;
++
++      again:
++        if (unlikely(idr_pre_get(&tcp_estats_idr, GFP_KERNEL) == 0))
++            return -ENOMEM;
++
++        spin_lock_bh(&tcp_estats_idr_lock);
++        err = idr_get_new_above(&tcp_estats_idr, stats, next_id, &id_cid);
++        if (!err) {
++                next_id = (id_cid + 1) % 1024;
++                stats->tcpe_cid = id_cid;
++        }
++        spin_unlock_bh(&tcp_estats_idr_lock);
++
++        if (unlikely(err == -EAGAIN))
++                goto again;
++        else if (unlikely(err))
++                return err;
++
++        return 0;
++}
++
++static void create_func(struct work_struct *work)
++{
++        // stub for netlink notification of new connections
++        ;
++}
++
++static void establish_func(struct work_struct *work)
++{
++        struct tcp_estats *stats = container_of(work, struct tcp_estats, establish_notify);
++        int err = 0;
++
++        if ((stats->tcpe_cid) >= 0) {
++                err = get_new_cid(stats);
++                if (err) printk(KERN_DEBUG "get_new_cid error %d\n", err);
++        }
++}
++
++static void destroy_func(struct work_struct *work)
++{
++        struct tcp_estats *stats = container_of(work, struct tcp_estats, destroy_notify.work);
++
++        int id_cid = stats->tcpe_cid;
++
++        if (id_cid >= 0) {
++                if (id_cid) {
++                        spin_lock_bh(&tcp_estats_idr_lock);
++                        idr_remove(&tcp_estats_idr, id_cid);
++                        spin_unlock_bh(&tcp_estats_idr_lock);
++                }
++                stats->tcpe_cid = -1;
++
++                tcp_estats_unuse(stats);
++        }
++}
++
++void __init tcp_estats_init()
++{
++        idr_init(&tcp_estats_idr);
++
++        create_notify_func = &create_func;
++        establish_notify_func = &establish_func;
++        destroy_notify_func = &destroy_func;
++
++//        persist_delay = 60 * HZ;
++        persist_delay = 0;
++
++        if ((tcp_estats_wq = alloc_workqueue("tcp_estats", WQ_MEM_RECLAIM, 256)) == NULL) {
++		printk(KERN_ERR "tcp_estats_init(): alloc_workqueue failed\n");
++		goto cleanup_fail;
++	}
++
++	tcp_estats_enabled = 1;
++        tcp_estats_wq_enabled = 1;
++
++	return;
++
++      cleanup_fail:
++	printk("TCP ESTATS: initialization failed.\n");
++}
++
++#ifdef CONFIG_IPV6_MODULE
++EXPORT_SYMBOL(tcp_estats_create);
++EXPORT_SYMBOL(tcp_estats_update_segrecv);
++EXPORT_SYMBOL(tcp_estats_update_finish_segrecv);
++#endif
+diff --git a/net/ipv4/tcp_estats_mib_var.c b/net/ipv4/tcp_estats_mib_var.c
+new file mode 100644
+index 0000000..1e851eb
+--- /dev/null
++++ b/net/ipv4/tcp_estats_mib_var.c
+@@ -0,0 +1,534 @@
++#include <linux/export.h>
++#include <net/tcp_estats_mib_var.h>
++
++union estats_val   perf_val_array[PERF_INDEX_MAX] = {{0}};
++union estats_val   path_val_array[PATH_INDEX_MAX] = {{0}};
++union estats_val stack_val_array[STACK_INDEX_MAX] = {{0}};
++union estats_val     app_val_array[APP_INDEX_MAX] = {{0}};
++union estats_val   tune_val_array[TUNE_INDEX_MAX] = {{0}};
++
++union estats_val *estats_val_array[MAX_TABLE] = {
++        [PERF_TABLE]  = perf_val_array,
++        [PATH_TABLE]  = path_val_array,
++        [STACK_TABLE] = stack_val_array,
++        [APP_TABLE]   = app_val_array,
++        [TUNE_TABLE]  = tune_val_array
++};
++EXPORT_SYMBOL(estats_val_array);
++
++#define OFFSET_TP(field)	((unsigned long)(&(((struct tcp_sock *)NULL)->field)))
++
++static void read_stats(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	memcpy(buf, (char *)stats + vp->read_data, tcp_estats_var_len(vp));
++}
++
++static void read_sk32(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	memcpy(buf, (char *)(stats->estats_sk) + vp->read_data, 4);
++}
++
++static void read_inf32(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++        u32 val;
++
++	memcpy(&val, (char *)stats + vp->read_data, 8);
++        val &= 0xffffffff;
++	memcpy(buf, &val, 4);
++}
++
++static void read_ElapsedSecs(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++        u32 val = 0; // currently unimplemented
++
++        memcpy(buf, &val, 4);
++}
++
++static void read_ElapsedMicroSecs(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++        u32 val = 0; // currently unimplemented
++
++        memcpy(buf, &val, 4);
++}
++
++static void read_StartTimeStamp(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++        u8 val = 0; // currently unimplemented
++
++        memcpy(buf, &val, 1);
++}
++
++static void read_PipeSize(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tcp_packets_in_flight(tp) * tp->mss_cache;
++	memcpy(buf, &val, 4);
++}
++
++static void read_SmoothedRTT(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++	
++	val = (tp->srtt >> 3) * 1000 / HZ;
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurRTO(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct inet_connection_sock *icsk = inet_csk(stats->estats_sk);
++	u32 val;
++
++	val = icsk->icsk_rto * 1000 / HZ;
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurCwnd(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tp->snd_cwnd * tp->mss_cache;
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurSsthresh(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tp->snd_ssthresh == 0x7fffffff ?
++	      tp->snd_ssthresh * tp->mss_cache : 0xffffffff;
++	memcpy(buf, &val, 4);
++}
++
++static void read_RetranThresh(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tp->reordering;
++	memcpy(buf, &val, 4);
++}
++
++static void read_RTTVar(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = (tp->rttvar >> 2) * 1000 / HZ;
++	memcpy(buf, &val, 4);
++}
++
++/* Note: this value returned is technically incorrect between a
++ * setsockopt of IP_TOS, and when the next segment is sent. */
++static void read_IpTosOut(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct inet_sock *inet = inet_sk(stats->estats_sk);
++
++	*(char *)buf = inet->tos;
++}
++
++static void read_RcvRTT(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++	
++	val = ((1000000*tp->rcv_rtt_est.rtt)/HZ)>>3;
++	memcpy(buf, &val, 4);
++}
++
++static void read_MSSSent(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tp->advmss;
++	memcpy(buf, &val, 4);
++}
++
++static void read_MSSRcvd(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val;
++
++	val = tp->rx_opt.rec_mss;
++	memcpy(buf, &val, 4);
++}
++
++/* Note: WinScaleSent and WinScaleRcvd are incorrectly
++ * implemented for the case where we sent a scale option
++ * but did not receive one. */
++static void read_WinScaleSent(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	val = tp->rx_opt.wscale_ok ? tp->rx_opt.rcv_wscale : -1;
++	memcpy(buf, &val, 4);
++}
++
++static void read_WinScaleRcvd(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	val = tp->rx_opt.wscale_ok ? tp->rx_opt.snd_wscale : -1;
++	memcpy(buf, &val, 4);
++}
++
++/* Note: all these (TimeStamps, ECN, SACK, Nagle) are incorrect
++ * if the sysctl values are changed during the connection. */
++static void read_TimeStamps(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	if (tp->rx_opt.tstamp_ok)
++		val = 1;
++	else
++		val = sysctl_tcp_timestamps ? 3 : 2;
++
++	memcpy(buf, &val, 4);
++}
++
++static void read_ECN(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	if (tp->ecn_flags & TCP_ECN_OK)
++		val = 1;
++	else
++		val = sysctl_tcp_ecn ? 3 : 2;
++	memcpy(buf, &val, 4);
++}
++
++static void read_WillSendSACK(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	if (tp->rx_opt.sack_ok)
++		val = 1;
++	else
++		val = sysctl_tcp_sack ? 3 : 2;
++
++	memcpy(buf, &val, 4);
++}
++
++#define read_WillUseSACK	read_WillSendSACK
++
++static void read_State(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	/* A mapping from Linux to MIB state. */
++	static char state_map[] = { 0, TCP_ESTATS_STATE_ESTABLISHED,
++				    TCP_ESTATS_STATE_SYNSENT,
++				    TCP_ESTATS_STATE_SYNRECEIVED,
++				    TCP_ESTATS_STATE_FINWAIT1,
++				    TCP_ESTATS_STATE_FINWAIT2,
++				    TCP_ESTATS_STATE_TIMEWAIT,
++				    TCP_ESTATS_STATE_CLOSED,
++				    TCP_ESTATS_STATE_CLOSEWAIT,
++				    TCP_ESTATS_STATE_LASTACK,
++				    TCP_ESTATS_STATE_LISTEN,
++				    TCP_ESTATS_STATE_CLOSING };
++	s32 val = state_map[stats->estats_sk->sk_state];
++	
++	memcpy(buf, &val, 4);
++}
++
++static void read_Nagle(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	s32 val;
++
++	val = tp->nonagle ? 2 : 1;
++	memcpy(buf, &val, 4);
++}
++
++static void read_InRecovery(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct inet_connection_sock *icsk = inet_csk(stats->estats_sk);
++	s32 val;
++
++	val = icsk->icsk_ca_state > TCP_CA_CWR ? 1 : 2;
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurTimeoutCount(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct inet_connection_sock *icsk = inet_csk(stats->estats_sk);
++	u32 val;
++	
++	val = icsk->icsk_retransmits;
++	memcpy(buf, &val, 4);
++}
++
++static inline u32 ofo_qlen(struct tcp_sock *tp)
++{
++	if (!skb_peek(&tp->out_of_order_queue))
++		return 0;
++	else
++		return TCP_SKB_CB(tp->out_of_order_queue.prev)->end_seq -
++		    TCP_SKB_CB(tp->out_of_order_queue.next)->seq;
++}
++
++static void read_CurReasmQueue(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val = ofo_qlen(tp);
++
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurAppWQueue(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val = tp->write_seq - stats->estats_vars.SndMax;
++
++	memcpy(buf, &val, 4);
++}
++
++static void read_CurAppRQueue(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 val = tp->rcv_nxt - tp->copied_seq;
++
++	memcpy(buf, &val, 4);
++}
++
++static void read_LimCwnd(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	struct tcp_sock *tp = tcp_sk(stats->estats_sk);
++	u32 tmp = (u32) (tp->snd_cwnd_clamp * tp->mss_cache);
++
++	memcpy(buf, &tmp, 4);
++}
++
++static void read_LimSsthresh(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	u32 tmp = (u32) sysctl_tcp_max_ssthresh;
++
++	if (tmp == 0)
++		tmp = 0x7fffffff;
++	memcpy(buf, &sysctl_tcp_max_ssthresh, 4);
++}
++
++static void read_LimRwin(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	memcpy(buf, (char *)(stats->estats_sk) + OFFSET_TP(window_clamp), 4);
++}
++
++static void read_LimMSS(void *buf, struct tcp_estats *stats,
++        struct tcp_estats_var *vp)
++{
++	memcpy(buf, (char *)(stats->estats_sk) + OFFSET_TP(rx_opt.mss_clamp), 4);
++}
++
++#define OFFSET_ST(field)	((unsigned long)(&(((struct tcp_estats *)NULL)->estats_vars.field)))
++
++#define ESTATSVAR(__name,__type)		{ .name = #__name, .type = TCP_ESTATS_##__type, .read = read_stats, .read_data = OFFSET_ST(__name), .write = NULL }
++#define ESTATSVARN(__name,__type,__var)	{ .name = #__name, .type = TCP_ESTATS_##__type, .read = read_stats, .read_data = OFFSET_ST(__var), .write = NULL }
++#define TPVAR32(__name,__type,__var)	{ .name = #__name, .type = TCP_ESTATS_##__type, .read = read_sk32, .read_data = OFFSET_TP(__var), .write = NULL }
++#define HCINF32(__name,__type) { .name = #__name, .type = TCP_ESTATS_##__type, .read = read_inf32, .read_data = OFFSET_ST(__name), .write = NULL }
++#define READFUNC(__name,__type)		{ .name = #__name, .type = TCP_ESTATS_##__type, .read = read_##__name, .write = NULL }
++#define RWFUNC(__name,__type)		{ .name = #__name, .type = TCP_ESTATS_##__type, .read = read_##__name, .write = write_##__name }
++
++int max_index[MAX_TABLE] = { PERF_INDEX_MAX, PATH_INDEX_MAX, STACK_INDEX_MAX, APP_INDEX_MAX, TUNE_INDEX_MAX };
++EXPORT_SYMBOL(max_index);
++
++struct tcp_estats_var perf_var_array[] = {
++        ESTATSVAR(SegsOut,UNSIGNED32),
++        ESTATSVAR(DataSegsOut,UNSIGNED32),
++        HCINF32(DataOctetsOut,UNSIGNED32),
++        ESTATSVARN(HCDataOctetsOut,UNSIGNED64, DataOctetsOut),
++        ESTATSVAR(SegsRetrans,UNSIGNED32),
++        ESTATSVAR(OctetsRetrans,UNSIGNED32),
++        ESTATSVAR(SegsIn,UNSIGNED32),
++        ESTATSVAR(DataSegsIn,UNSIGNED32),
++        HCINF32(DataOctetsIn,UNSIGNED32),
++        ESTATSVARN(HCDataOctetsIn,UNSIGNED64, DataOctetsIn),
++        READFUNC(ElapsedSecs,UNSIGNED32),
++        READFUNC(ElapsedMicroSecs,UNSIGNED32),
++        READFUNC(StartTimeStamp,UNSIGNED8),
++        TPVAR32(CurMSS,UNSIGNED32, mss_cache),
++        READFUNC(PipeSize,UNSIGNED32),
++        ESTATSVAR(MaxPipeSize,UNSIGNED32),
++        READFUNC(SmoothedRTT,UNSIGNED32),
++        READFUNC(CurRTO,UNSIGNED32),
++        ESTATSVAR(CongSignals,UNSIGNED32),
++        READFUNC(CurCwnd,UNSIGNED32),
++        READFUNC(CurSsthresh,UNSIGNED32),
++        ESTATSVAR(Timeouts,UNSIGNED32),
++        TPVAR32(CurRwinSent,UNSIGNED32, rcv_wnd),
++        ESTATSVAR(MaxRwinSent,UNSIGNED32),
++        ESTATSVAR(ZeroRwinSent,UNSIGNED32),
++        TPVAR32(CurRwinRcvd,UNSIGNED32, snd_wnd),
++        ESTATSVAR(MaxRwinRcvd,UNSIGNED32),
++        ESTATSVAR(ZeroRwinRcvd,UNSIGNED32),
++        ESTATSVARN(SndLimTransRwin,UNSIGNED32,
++                snd_lim_trans[TCP_ESTATS_SNDLIM_RWIN]),
++        ESTATSVARN(SndLimTransCwnd,UNSIGNED32,
++                snd_lim_trans[TCP_ESTATS_SNDLIM_CWND]),
++        ESTATSVARN(SndLimTransSnd,UNSIGNED32,
++                snd_lim_trans[TCP_ESTATS_SNDLIM_SENDER]),
++        ESTATSVARN(SndLimTimeRwin,UNSIGNED32,
++                snd_lim_time[TCP_ESTATS_SNDLIM_RWIN]),
++        ESTATSVARN(SndLimTimeCwnd,UNSIGNED32,
++                snd_lim_time[TCP_ESTATS_SNDLIM_CWND]),
++        ESTATSVARN(SndLimTimeSnd,UNSIGNED32,
++                snd_lim_time[TCP_ESTATS_SNDLIM_SENDER]),
++};
++
++struct tcp_estats_var path_var_array[] = {
++        READFUNC(RetranThresh,UNSIGNED32),
++        ESTATSVAR(NonRecovDAEpisodes,UNSIGNED32),
++        ESTATSVAR(SumOctetsReordered,UNSIGNED32),
++        ESTATSVAR(NonRecovDA,UNSIGNED32),
++        ESTATSVAR(SampleRTT,UNSIGNED32),
++        READFUNC(RTTVar,UNSIGNED32),
++        ESTATSVAR(MaxRTT,UNSIGNED32),
++        ESTATSVAR(MinRTT,UNSIGNED32),
++        HCINF32(SumRTT,UNSIGNED32),
++        ESTATSVARN(HCSumRTT,UNSIGNED64, SumRTT),
++        ESTATSVAR(CountRTT,UNSIGNED32),
++        ESTATSVAR(MaxRTO,UNSIGNED32),
++        ESTATSVAR(MinRTO,UNSIGNED32),
++        ESTATSVAR(IpTtl,UNSIGNED32),
++        ESTATSVAR(IpTosIn,UNSIGNED8),
++        READFUNC(IpTosOut,UNSIGNED8),
++        ESTATSVAR(PreCongSumCwnd,UNSIGNED32),
++        ESTATSVAR(PreCongSumRTT,UNSIGNED32),
++        ESTATSVAR(PostCongSumRTT,UNSIGNED32),
++        ESTATSVAR(PostCongCountRTT,UNSIGNED32),
++        ESTATSVAR(ECNsignals,UNSIGNED32),
++        ESTATSVAR(DupAckEpisodes,UNSIGNED32),
++        READFUNC(RcvRTT,UNSIGNED32),
++        ESTATSVAR(DupAcksOut,UNSIGNED32),
++        ESTATSVAR(CERcvd,UNSIGNED32),
++        ESTATSVAR(ECESent,UNSIGNED32),
++};
++
++struct tcp_estats_var stack_var_array[] = {
++	ESTATSVAR(ActiveOpen,SIGNED32),
++	READFUNC(MSSSent,UNSIGNED32),
++	READFUNC(MSSRcvd,UNSIGNED32),
++	READFUNC(WinScaleSent,SIGNED32),
++	READFUNC(WinScaleRcvd,SIGNED32),
++	READFUNC(TimeStamps,SIGNED32),
++	READFUNC(ECN,SIGNED32),
++	READFUNC(WillSendSACK,SIGNED32),
++	READFUNC(WillUseSACK,SIGNED32),
++	READFUNC(State,SIGNED32),
++	READFUNC(Nagle,SIGNED32),
++	ESTATSVAR(MaxSsCwnd,UNSIGNED32),
++	ESTATSVAR(MaxCaCwnd,UNSIGNED32),
++	ESTATSVAR(MaxSsthresh,UNSIGNED32),
++	ESTATSVAR(MinSsthresh,UNSIGNED32),
++	READFUNC(InRecovery,SIGNED32),
++	ESTATSVAR(DupAcksIn,UNSIGNED32),
++	ESTATSVAR(SpuriousFrDetected,UNSIGNED32),
++	ESTATSVAR(SpuriousRtoDetected,UNSIGNED32),
++	ESTATSVAR(SoftErrors,UNSIGNED32),
++	ESTATSVAR(SoftErrorReason,SIGNED32),
++	ESTATSVAR(SlowStart,UNSIGNED32),
++	ESTATSVAR(CongAvoid,UNSIGNED32),
++	ESTATSVAR(OtherReductions,UNSIGNED32),
++	ESTATSVAR(CongOverCount,UNSIGNED32),
++	ESTATSVAR(FastRetran,UNSIGNED32),
++	ESTATSVAR(SubsequentTimeouts,UNSIGNED32),
++	READFUNC(CurTimeoutCount,UNSIGNED32),
++	ESTATSVAR(AbruptTimeouts,UNSIGNED32),
++	ESTATSVAR(SACKsRcvd,UNSIGNED32),
++	ESTATSVAR(SACKBlocksRcvd,UNSIGNED32),
++	ESTATSVAR(SendStall,UNSIGNED32),
++	ESTATSVAR(DSACKDups,UNSIGNED32),
++	ESTATSVAR(MaxMSS,UNSIGNED32),
++	ESTATSVAR(MinMSS,UNSIGNED32),
++	ESTATSVAR(SndInitial,UNSIGNED32),
++	ESTATSVAR(RecInitial,UNSIGNED32),
++	ESTATSVAR(CurRetxQueue,UNSIGNED32),
++	ESTATSVAR(MaxRetxQueue,UNSIGNED32),
++	READFUNC(CurReasmQueue,UNSIGNED32),
++	ESTATSVAR(MaxReasmQueue,UNSIGNED32),
++};
++
++struct tcp_estats_var app_var_array[] = {
++        TPVAR32(SndUna,UNSIGNED32, snd_una),
++        TPVAR32(SndNxt,UNSIGNED32, snd_nxt),
++        ESTATSVAR(SndMax,UNSIGNED32),
++        HCINF32(ThruOctetsAcked,UNSIGNED32),
++        ESTATSVARN(HCThruOctetsAcked,UNSIGNED64, ThruOctetsAcked),
++        TPVAR32(RcvNxt,UNSIGNED32, rcv_nxt),
++        HCINF32(ThruOctetsReceived,UNSIGNED32),
++        ESTATSVARN(HCThruOctetsReceived,UNSIGNED64, ThruOctetsReceived),
++        READFUNC(CurAppWQueue,UNSIGNED32),
++        ESTATSVAR(MaxAppWQueue,UNSIGNED32),
++        READFUNC(CurAppRQueue,UNSIGNED32),
++        ESTATSVAR(MaxAppRQueue,UNSIGNED32),
++};
++
++struct tcp_estats_var tune_var_array[] = {
++        READFUNC(LimCwnd,UNSIGNED32),
++        READFUNC(LimSsthresh,UNSIGNED32),
++        READFUNC(LimRwin,UNSIGNED32),
++        READFUNC(LimMSS,UNSIGNED32),
++};
++
++struct tcp_estats_var *estats_var_array[] = {
++        perf_var_array,
++        path_var_array,
++        stack_var_array,
++        app_var_array,
++        tune_var_array
++};
++EXPORT_SYMBOL(estats_var_array);
++
++void tcp_estats_read_connection_spec(struct tcp_estats_connection_spec *spec,
++        struct tcp_estats *stats)
++{
++        memcpy(&spec->rem_addr[0],
++                (char *)stats + OFFSET_ST(RemAddress), 17);
++        memcpy(&spec->local_addr[0],
++                (char *)stats + OFFSET_ST(LocalAddress), 17);
++        spec->rem_port = stats->estats_vars.RemPort;
++        spec->local_port = stats->estats_vars.LocalPort;
++}
++EXPORT_SYMBOL(tcp_estats_read_connection_spec);
++
++
+diff --git a/net/ipv4/tcp_estats_nl.c b/net/ipv4/tcp_estats_nl.c
+new file mode 100644
+index 0000000..4d267d2
+--- /dev/null
++++ b/net/ipv4/tcp_estats_nl.c
+@@ -0,0 +1,340 @@
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/skbuff.h>
++#include <linux/genetlink.h>
++#include <net/genetlink.h>
++#include <net/inet_hashtables.h>
++#include <net/tcp.h>
++#include <net/sock.h>
++
++#include <net/tcp_estats_mib_var.h>
++#include <net/tcp_estats_nl.h>
++
++
++static struct genl_family genl_estats_family = {
++	.id     = GENL_ID_GENERATE,
++	.name   = "tcp_estats",
++	.hdrsize = 0,
++	.version = 1,
++	.maxattr = NLE_ATTR_MAX,
++};
++
++static struct genl_multicast_group genl_estats_mc = {
++	.name   = "tcp_estats_mc",
++};
++
++static const struct nla_policy spec_policy[NEA_4TUPLE_MAX+1] = {
++        [NEA_REM_ADDR]    = { .type = NLA_STRING },
++        [NEA_LOCAL_ADDR]  = { .type = NLA_STRING },
++        [NEA_REM_PORT]    = { .type = NLA_U16 },
++        [NEA_LOCAL_PORT]  = { .type = NLA_U16 },
++        [NEA_CID]         = { .type = NLA_U32 },
++};
++
++static const struct nla_policy mask_policy[NEA_MASK_MAX+1] = {
++        [NEA_PERF_MASK]   = { .type = NLA_U64 },
++        [NEA_PATH_MASK]   = { .type = NLA_U64 },
++        [NEA_STACK_MASK]  = { .type = NLA_U64 },
++        [NEA_APP_MASK]    = { .type = NLA_U64 },
++        [NEA_TUNE_MASK]   = { .type = NLA_U64 },
++};
++
++static int
++genl_list_conns(struct sk_buff *skb, struct genl_info *info)
++{
++
++	struct sk_buff *msg = NULL;
++	void *hdr = NULL;
++        struct nlattr *nest;
++        struct tcp_estats *stats;
++        struct tcp_estats_connection_spec spec;
++
++        int tmpid = 0;
++
++        while (1) {
++                msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
++	        if (msg == NULL)
++                        return -ENOMEM;
++
++	        hdr = genlmsg_put(msg, 0, 0, &genl_estats_family, 0, TCPE_CMD_READ_CONN);
++	        if (hdr == NULL)
++                        goto nlmsg_failure;
++
++                spin_lock(&tcp_estats_idr_lock);
++                stats = idr_get_next(&tcp_estats_idr, &tmpid);
++                spin_unlock(&tcp_estats_idr_lock);
++
++                if (stats == NULL)
++                        break;
++
++                tcp_estats_read_connection_spec(&spec, stats);
++
++                nest = nla_nest_start(msg, NLE_ATTR_4TUPLE | NLA_F_NESTED);
++
++                nla_put(msg, NEA_REM_ADDR, 17, &spec.rem_addr[0]);
++                nla_put_u16(msg, NEA_REM_PORT, spec.rem_port);
++                nla_put(msg, NEA_LOCAL_ADDR, 17, &spec.local_addr[0]);
++                nla_put_u16(msg, NEA_LOCAL_PORT, spec.local_port);
++                nla_put_u32(msg, NEA_CID, tmpid);
++
++                nla_nest_end(msg, nest);
++
++	        genlmsg_end(msg, hdr);
++	        genlmsg_multicast(msg, 0, genl_estats_mc.id, GFP_KERNEL);
++
++                tmpid = tmpid + 1;
++        }
++
++        return 0;
++
++nlmsg_failure:
++        printk(KERN_DEBUG "nlmsg_failure\n");
++
++        return -ENOBUFS;
++}
++
++static int
++genl_get_vars(struct sk_buff *skb, struct genl_info *info)
++{
++	struct sk_buff *msg = NULL;
++	void *hdr = NULL;
++        struct nlattr *tb[NEA_4TUPLE_MAX+1];
++        struct nlattr *tb_mask[NEA_MASK_MAX+1] = {};
++        struct nlattr *nest[MAX_TABLE];
++
++        struct tcp_estats *stats;
++        int cid;
++        int ret;
++        int i, j;
++
++        int tblnum;
++        uint64_t mask;
++        uint64_t masks[MAX_TABLE] = { DEFAULT_PERF_MASK, DEFAULT_PATH_MASK,
++                DEFAULT_STACK_MASK, DEFAULT_APP_MASK, DEFAULT_TUNE_MASK };
++
++        int index[MAX_TABLE] = { PERF_INDEX_MAX, PATH_INDEX_MAX,
++                STACK_INDEX_MAX, APP_INDEX_MAX, TUNE_INDEX_MAX };
++        int if_mask[] = { [0 ... MAX_TABLE-1] = 0 };
++        static void *mask_jump[] = { &&mask_no, &&mask_yes };
++
++	if (!info->attrs[NLE_ATTR_4TUPLE])
++		return -EINVAL;
++
++        ret = nla_parse_nested(tb, NEA_4TUPLE_MAX, info->attrs[NLE_ATTR_4TUPLE], spec_policy);
++
++	if (ret < 0)
++		goto nla_parse_failure;
++
++        if(!tb[NEA_CID])
++                goto nla_parse_failure;
++
++        cid = nla_get_u32(tb[NEA_CID]);
++
++        if (cid < 1)
++                goto nla_parse_failure;
++
++        ret = nla_parse_nested(tb_mask, NEA_MASK_MAX,
++                info->attrs[NLE_ATTR_MASK], mask_policy);
++
++	if (ret < 0)
++		goto nla_parse_failure;
++
++        if (tb_mask[NEA_PERF_MASK]) {
++                masks[PERF_TABLE] = nla_get_u64(tb_mask[NEA_PERF_MASK]);
++                if_mask[PERF_TABLE] = 1;
++        }
++        if (tb_mask[NEA_PATH_MASK]) {
++                masks[PATH_TABLE] = nla_get_u64(tb_mask[NEA_PATH_MASK]);
++                if_mask[PATH_TABLE] = 1;
++        }
++        if (tb_mask[NEA_STACK_MASK]) {
++                masks[STACK_TABLE] = nla_get_u64(tb_mask[NEA_STACK_MASK]);
++                if_mask[STACK_TABLE] = 1;
++        }
++        if (tb_mask[NEA_APP_MASK]) {
++                masks[APP_TABLE] = nla_get_u64(tb_mask[NEA_APP_MASK]);
++                if_mask[APP_TABLE] = 1;
++        }
++        if (tb_mask[NEA_TUNE_MASK]) {
++                masks[TUNE_TABLE] = nla_get_u64(tb_mask[NEA_TUNE_MASK]);
++                if_mask[TUNE_TABLE] = 1;
++        }
++
++        rcu_read_lock();
++        stats = idr_find(&tcp_estats_idr, cid);
++        rcu_read_unlock();
++        if (stats == NULL)
++                return -EINVAL;
++
++        tcp_estats_use(stats);
++
++        lock_sock(stats->estats_sk);
++
++        for (tblnum = 0; tblnum < MAX_TABLE; tblnum++) {
++
++                goto *mask_jump[if_mask[tblnum]];
++
++              mask_yes:
++                i = 0;
++                mask = masks[tblnum];
++                while ((i < index[tblnum]) && mask) {
++                        j = __builtin_ctzl(mask);
++                        mask = mask >> j;
++                        i += j;
++
++                        read_tcp_estats(&(estats_val_array[tblnum][i]), stats, &(estats_var_array[tblnum][i]));
++                        mask = mask >> 1;
++                        i++;
++                }
++                
++                continue;
++
++              mask_no:
++                for (i = 0; i < max_index[tblnum]; i++) {
++
++                        read_tcp_estats(&(estats_val_array[tblnum][i]), stats, &(estats_var_array[tblnum][i]));
++                }
++        }
++
++        release_sock(stats->estats_sk);
++
++        tcp_estats_unuse(stats);
++
++	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
++	if (msg == NULL)
++		return -ENOMEM;
++
++	hdr = genlmsg_put(msg, 0, 0, &genl_estats_family, 0, TCPE_CMD_READ_CONN);
++	if (hdr == NULL)
++		goto nlmsg_failure;
++
++        for (tblnum = 0; tblnum < MAX_TABLE; tblnum++) {
++        
++                switch (tblnum) {
++                case PERF_TABLE:
++                        nest[tblnum] = nla_nest_start(msg, NLE_ATTR_PERF | NLA_F_NESTED);
++                        break;
++                case PATH_TABLE:
++                        nest[tblnum] = nla_nest_start(msg, NLE_ATTR_PATH | NLA_F_NESTED);
++                        break;
++                case STACK_TABLE:
++                        nest[tblnum] = nla_nest_start(msg, NLE_ATTR_STACK | NLA_F_NESTED);
++                        break;
++                case APP_TABLE:
++                        nest[tblnum] = nla_nest_start(msg, NLE_ATTR_APP | NLA_F_NESTED);
++                        break;
++                case TUNE_TABLE:
++                        nest[tblnum] = nla_nest_start(msg, NLE_ATTR_TUNE | NLA_F_NESTED);
++                        break;
++                }
++                if (!nest[tblnum])
++                        goto nla_put_failure;
++
++                i = 0;
++                mask = masks[tblnum];
++                while ((i < max_index[tblnum]) && mask) {
++                        j = __builtin_ctzl(mask);
++                        mask = mask >> j;
++                        i += j;
++
++
++
++                        switch (estats_var_array[tblnum][i].type) {
++        
++                        case TCP_ESTATS_UNSIGNED64:
++                                NLA_PUT_U64(msg, i, estats_val_array[tblnum][i].o);
++                                break;
++                        case TCP_ESTATS_UNSIGNED32:
++                                NLA_PUT_U32(msg, i, estats_val_array[tblnum][i].t);
++                        break;
++                        case TCP_ESTATS_SIGNED32:
++                                NLA_PUT_U32(msg, i, estats_val_array[tblnum][i].s);
++                                break;
++                        case TCP_ESTATS_UNSIGNED16:
++                                NLA_PUT_U16(msg, i, estats_val_array[tblnum][i].w);
++                                break;
++                        case TCP_ESTATS_UNSIGNED8:
++                                NLA_PUT_U8(msg, i, estats_val_array[tblnum][i].b);
++                                break;
++                        default:
++                                break;
++                        }
++        
++                        mask = mask >> 1;
++                        i++;
++                }
++                nla_nest_end(msg, nest[tblnum]);
++        }
++	genlmsg_end(msg, hdr);
++
++	genlmsg_multicast(msg, 0, genl_estats_mc.id, GFP_KERNEL);
++	return 0;
++
++nlmsg_failure:
++        printk(KERN_DEBUG "nlmsg_failure\n");
++
++nla_put_failure:
++        printk(KERN_DEBUG "nla_put_failure\n");
++	genlmsg_cancel(msg, hdr);
++	kfree_skb(msg);
++	return -ENOBUFS;
++
++nla_parse_failure:
++        printk(KERN_DEBUG "nla_parse_failure\n");
++
++        return -EINVAL;
++}
++
++static struct genl_ops genl_estats_ops[] = {
++        {
++                .cmd  = TCPE_CMD_READ_CONN,
++                .doit = genl_get_vars,
++        },
++        {
++                .cmd  = TCPE_CMD_LIST_CONNS,
++                .doit = genl_list_conns,
++        },
++};
++
++static int __init tcp_estats_nl_init(void)
++{
++	int ret = -EINVAL;
++        int i;
++
++	ret = genl_register_family(&genl_estats_family);
++	if (ret < 0)
++		goto err;
++
++	for (i = 0; i < ARRAY_SIZE(genl_estats_ops); i++) {
++		ret = genl_register_ops(&genl_estats_family,
++					&genl_estats_ops[i]);
++		if (ret < 0)
++			goto err_unregister;
++	}
++
++	ret = genl_register_mc_group(&genl_estats_family, &genl_estats_mc);
++	if (ret < 0)
++		goto err_unregister;
++
++        printk(KERN_INFO "tcp_estats netlink module initialized.\n");
++
++        return ret;
++
++err_unregister:
++	genl_unregister_family(&genl_estats_family);
++err:
++	return ret;
++}
++
++void __exit tcp_estats_nl_exit(void)
++{
++
++        genl_unregister_family(&genl_estats_family);
++
++        printk(KERN_INFO "tcp_estats netlink module exiting.\n");
++}
++
++module_init(tcp_estats_nl_init);
++module_exit(tcp_estats_nl_exit);
++
++MODULE_LICENSE("GPL");
+diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
+index b5e315f..0dd6a85 100644
+--- a/net/ipv4/tcp_input.c
++++ b/net/ipv4/tcp_input.c
+@@ -231,6 +231,9 @@ static inline void TCP_ECN_check_ce(struct tcp_sock *tp, const struct sk_buff *s
+ 			tcp_enter_quickack_mode((struct sock *)tp);
+ 		break;
+ 	case INET_ECN_CE:
++		TCP_ESTATS_VAR_INC(tp, CERcvd);
++		if (tp->ecn_flags & TCP_ECN_DEMAND_CWR)
++			TCP_ESTATS_VAR_INC(tp, ECESent);
+ 		tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
+ 		/* fallinto */
+ 	default:
+@@ -853,6 +856,7 @@ void tcp_enter_cwr(struct sock *sk, const int set_ssthresh)
+ 
+ 		tcp_set_ca_state(sk, TCP_CA_CWR);
+ 	}
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_congestion(tp));
+ }
+ 
+ /*
+@@ -1763,6 +1767,9 @@ tcp_sacktag_write_queue(struct sock *sk, const struct sk_buff *ack_skb,
+ 	state.flag = 0;
+ 	state.reord = tp->packets_out;
+ 
++	TCP_ESTATS_VAR_INC(tp, SACKsRcvd);
++	TCP_ESTATS_VAR_ADD(tp, SACKBlocksRcvd, num_sacks);
++
+ 	if (!tp->sacked_out) {
+ 		if (WARN_ON(tp->fackets_out))
+ 			tp->fackets_out = 0;
+@@ -2234,6 +2241,8 @@ void tcp_enter_loss(struct sock *sk, int how)
+ 	struct tcp_sock *tp = tcp_sk(sk);
+ 	struct sk_buff *skb;
+ 
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_congestion(tp));
++
+ 	/* Reduce ssthresh if it has not yet been made inside this window. */
+ 	if (icsk->icsk_ca_state <= TCP_CA_Disorder || tp->snd_una == tp->high_seq ||
+ 	    (icsk->icsk_ca_state == TCP_CA_Loss && !icsk->icsk_retransmits)) {
+@@ -2621,9 +2630,15 @@ static void tcp_update_scoreboard(struct sock *sk, int fast_rexmit)
+  */
+ static inline void tcp_moderate_cwnd(struct tcp_sock *tp)
+ {
+-	tp->snd_cwnd = min(tp->snd_cwnd,
+-			   tcp_packets_in_flight(tp) + tcp_max_burst(tp));
+-	tp->snd_cwnd_stamp = tcp_time_stamp;
++	u32 pkts = tcp_packets_in_flight(tp) + tcp_max_burst(tp);
++
++	if (pkts < tp->snd_cwnd) {
++		tp->snd_cwnd = pkts;
++		tp->snd_cwnd_stamp = tcp_time_stamp;
++
++		TCP_ESTATS_VAR_INC(tp, OtherReductions);
++		TCP_ESTATS_VAR_INC(tp, OtherReductionsCM);
++	}
+ }
+ 
+ /* Lower bound on congestion window is slow start threshold
+@@ -2712,6 +2727,7 @@ static void tcp_undo_cwr(struct sock *sk, const bool undo_ssthresh)
+ 		if (undo_ssthresh && tp->prior_ssthresh > tp->snd_ssthresh) {
+ 			tp->snd_ssthresh = tp->prior_ssthresh;
+ 			TCP_ECN_withdraw_cwr(tp);
++			TCP_ESTATS_VAR_INC(tp, CongOverCount);
+ 		}
+ 	} else {
+ 		tp->snd_cwnd = max(tp->snd_cwnd, tp->snd_ssthresh);
+@@ -2737,11 +2753,13 @@ static int tcp_try_undo_recovery(struct sock *sk)
+ 		 */
+ 		DBGUNDO(sk, inet_csk(sk)->icsk_ca_state == TCP_CA_Loss ? "loss" : "retrans");
+ 		tcp_undo_cwr(sk, true);
+-		if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss)
++		if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss) {
+ 			mib_idx = LINUX_MIB_TCPLOSSUNDO;
+-		else
++			TCP_ESTATS_VAR_INC(tp, SpuriousRtoDetected);
++		} else {
+ 			mib_idx = LINUX_MIB_TCPFULLUNDO;
+-
++			TCP_ESTATS_VAR_INC(tp, SpuriousFrDetected);
++		}
+ 		NET_INC_STATS_BH(sock_net(sk), mib_idx);
+ 		tp->undo_marker = 0;
+ 	}
+@@ -2894,8 +2912,10 @@ static void tcp_try_to_open(struct sock *sk, int flag)
+ 	if (!tp->frto_counter && !tcp_any_retrans_done(sk))
+ 		tp->retrans_stamp = 0;
+ 
+-	if (flag & FLAG_ECE)
++	if (flag & FLAG_ECE) {
+ 		tcp_enter_cwr(sk, 1);
++		TCP_ESTATS_VAR_INC(tp, ECNsignals);
++	}
+ 
+ 	if (inet_csk(sk)->icsk_ca_state != TCP_CA_CWR) {
+ 		tcp_try_keep_open(sk);
+@@ -3076,6 +3096,10 @@ static void tcp_fastretrans_alert(struct sock *sk, int pkts_acked,
+ 			}
+ 			break;
+ 
++		case TCP_CA_Disorder:
++			TCP_ESTATS_VAR_INC(tp, NonRecovDAEpisodes);
++			break;
++
+ 		case TCP_CA_Recovery:
+ 			if (tcp_is_reno(tp))
+ 				tcp_reset_reno_sack(tp);
+@@ -3119,6 +3143,9 @@ static void tcp_fastretrans_alert(struct sock *sk, int pkts_acked,
+ 		if (icsk->icsk_ca_state <= TCP_CA_Disorder)
+ 			tcp_try_undo_dsack(sk);
+ 
++		if (icsk->icsk_ca_state == TCP_CA_Disorder)
++			TCP_ESTATS_VAR_INC(tp, NonRecovDA);
++
+ 		if (!tcp_time_to_recover(sk)) {
+ 			tcp_try_to_open(sk, flag);
+ 			return;
+@@ -3163,6 +3190,8 @@ static void tcp_fastretrans_alert(struct sock *sk, int pkts_acked,
+ 		tp->prr_out = 0;
+ 		tcp_set_ca_state(sk, TCP_CA_Recovery);
+ 		fast_rexmit = 1;
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_congestion(tp));
++		TCP_ESTATS_VAR_INC(tp, FastRetran);
+ 	}
+ 
+ 	if (do_lost || (tcp_is_fack(tp) && tcp_head_timedout(sk)))
+@@ -3176,6 +3205,7 @@ void tcp_valid_rtt_meas(struct sock *sk, u32 seq_rtt)
+ {
+ 	tcp_rtt_estimator(sk, seq_rtt);
+ 	tcp_set_rto(sk);
++	TCP_ESTATS_UPDATE(tcp_sk(sk), tcp_estats_update_rtt(sk, seq_rtt));
+ 	inet_csk(sk)->icsk_backoff = 0;
+ }
+ EXPORT_SYMBOL(tcp_valid_rtt_meas);
+@@ -3524,9 +3554,11 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
+ 				tp->max_window = nwin;
+ 				tcp_sync_mss(sk, inet_csk(sk)->icsk_pmtu_cookie);
+ 			}
++			TCP_ESTATS_UPDATE(tp, tcp_estats_update_rwin_rcvd(tp));
+ 		}
+ 	}
+ 
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_acked(tp, ack));
+ 	tp->snd_una = ack;
+ 
+ 	return flag;
+@@ -3668,6 +3700,7 @@ static int tcp_process_frto(struct sock *sk, int flag)
+ 		tp->frto_counter = 0;
+ 		tp->undo_marker = 0;
+ 		NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPSPURIOUSRTOS);
++		TCP_ESTATS_VAR_INC(tp, SpuriousRtoDetected);
+ 	}
+ 	return 0;
+ }
+@@ -3688,22 +3721,33 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
+ 	int pkts_acked = 0;
+ 	int newly_acked_sacked = 0;
+ 	int frto_cwnd = 0;
++	int prior_state = icsk->icsk_ca_state;
+ 
+ 	/* If the ack is older than previous acks
+ 	 * then we can probably ignore it.
+ 	 */
+-	if (before(ack, prior_snd_una))
++	if (before(ack, prior_snd_una)) {
++		TCP_ESTATS_VAR_INC(tp, SoftErrors);
++		TCP_ESTATS_VAR_SET(tp, SoftErrorReason, 3);
+ 		goto old_ack;
++	}
+ 
+ 	/* If the ack includes data we haven't sent yet, discard
+ 	 * this segment (RFC793 Section 3.9).
+ 	 */
+-	if (after(ack, tp->snd_nxt))
++	if (after(ack, tp->snd_nxt)) {
++		TCP_ESTATS_VAR_INC(tp, SoftErrors);
++		TCP_ESTATS_VAR_SET(tp, SoftErrorReason, 4);
+ 		goto invalid_ack;
++	}
+ 
+-	if (after(ack, prior_snd_una))
++	if (after(ack, prior_snd_una)) {
+ 		flag |= FLAG_SND_UNA_ADVANCED;
+-
++		if (icsk->icsk_ca_state == TCP_CA_Disorder)
++			TCP_ESTATS_VAR_ADD(tp, SumOctetsReordered,
++					   ack - prior_snd_una);
++	}
++	
+ 	if (sysctl_tcp_abc) {
+ 		if (icsk->icsk_ca_state < TCP_CA_CWR)
+ 			tp->bytes_acked += ack - prior_snd_una;
+@@ -3722,6 +3766,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
+ 		 * Note, we use the fact that SND.UNA>=SND.WL2.
+ 		 */
+ 		tcp_update_wl(tp, ack_seq);
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_acked(tp, ack));
+ 		tp->snd_una = ack;
+ 		flag |= FLAG_WIN_UPDATE;
+ 
+@@ -3776,6 +3821,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
+ 		is_dupack = !(flag & (FLAG_SND_UNA_ADVANCED | FLAG_NOT_DUP));
+ 		tcp_fastretrans_alert(sk, pkts_acked, newly_acked_sacked,
+ 				      is_dupack, flag);
++
++		if (icsk->icsk_ca_state == TCP_CA_Open &&
++		    prior_state >= TCP_CA_CWR)
++			TCP_ESTATS_UPDATE(tp, tcp_estats_update_post_congestion(tp));
+ 	} else {
+ 		if ((flag & FLAG_DATA_ACKED) && !frto_cwnd)
+ 			tcp_cong_avoid(sk, ack, prior_in_flight);
+@@ -4416,6 +4465,7 @@ static void tcp_ofo_queue(struct sock *sk)
+ 
+ 		__skb_unlink(skb, &tp->out_of_order_queue);
+ 		__skb_queue_tail(&sk->sk_receive_queue, skb);
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_rcvd(tp, TCP_SKB_CB(skb)->end_seq));
+ 		tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+ 		if (tcp_hdr(skb)->fin)
+ 			tcp_fin(sk);
+@@ -4496,6 +4546,7 @@ queue_and_out:
+ 			skb_set_owner_r(skb, sk);
+ 			__skb_queue_tail(&sk->sk_receive_queue, skb);
+ 		}
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_rcvd(tp, TCP_SKB_CB(skb)->end_seq));
+ 		tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+ 		if (skb->len)
+ 			tcp_event_data_recv(sk, skb);
+@@ -4517,6 +4568,8 @@ queue_and_out:
+ 
+ 		tcp_fast_path_check(sk);
+ 
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_recvq(sk));
++
+ 		if (eaten > 0)
+ 			__kfree_skb(skb);
+ 		else if (!sock_flag(sk, SOCK_DEAD))
+@@ -4571,8 +4624,10 @@ drop:
+ 	SOCK_DEBUG(sk, "out of order segment: rcv_next %X seq %X - %X\n",
+ 		   tp->rcv_nxt, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
+ 
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_recvq(sk));
+ 	skb_set_owner_r(skb, sk);
+ 
++	TCP_ESTATS_VAR_INC(tp, DupAcksOut);
+ 	if (!skb_peek(&tp->out_of_order_queue)) {
+ 		/* Initial out of order segment, build 1 SACK. */
+ 		if (tcp_is_sack(tp)) {
+@@ -4582,6 +4637,7 @@ drop:
+ 						TCP_SKB_CB(skb)->end_seq;
+ 		}
+ 		__skb_queue_head(&tp->out_of_order_queue, skb);
++		TCP_ESTATS_VAR_INC(tp, DupAckEpisodes);
+ 	} else {
+ 		struct sk_buff *skb1 = skb_peek_tail(&tp->out_of_order_queue);
+ 		u32 seq = TCP_SKB_CB(skb)->seq;
+@@ -4924,6 +4980,8 @@ void tcp_cwnd_application_limited(struct sock *sk)
+ 		if (win_used < tp->snd_cwnd) {
+ 			tp->snd_ssthresh = tcp_current_ssthresh(sk);
+ 			tp->snd_cwnd = (tp->snd_cwnd + win_used) >> 1;
++			TCP_ESTATS_VAR_INC(tp, OtherReductions);
++			TCP_ESTATS_VAR_INC(tp, OtherReductionsCV);
+ 		}
+ 		tp->snd_cwnd_used = 0;
+ 	}
+@@ -5239,6 +5297,8 @@ static int tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
+ 	    tcp_paws_discard(sk, skb)) {
+ 		if (!th->rst) {
+ 			NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_PAWSESTABREJECTED);
++			TCP_ESTATS_VAR_INC(tp, SoftErrors);
++			TCP_ESTATS_VAR_SET(tp, SoftErrorReason, 5);
+ 			tcp_send_dupack(sk, skb);
+ 			goto discard;
+ 		}
+@@ -5255,6 +5315,10 @@ static int tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
+ 		 */
+ 		if (!th->rst)
+ 			tcp_send_dupack(sk, skb);
++		TCP_ESTATS_VAR_INC(tp, SoftErrors);
++		TCP_ESTATS_VAR_SET(tp, SoftErrorReason,
++				   before(TCP_SKB_CB(skb)->end_seq, tp->rcv_wup) ?
++				   1 : 2);
+ 		goto discard;
+ 	}
+ 
+@@ -5390,6 +5454,8 @@ int tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
+ 				return 0;
+ 			} else { /* Header too small */
+ 				TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_INERRS);
++				TCP_ESTATS_VAR_INC(tp, SoftErrors);
++				TCP_ESTATS_VAR_SET(tp, SoftErrorReason, 8);
+ 				goto discard;
+ 			}
+ 		} else {
+@@ -5425,6 +5491,7 @@ int tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
+ 					tcp_rcv_rtt_measure_ts(sk, skb);
+ 
+ 					__skb_pull(skb, tcp_header_len);
++					TCP_ESTATS_UPDATE(tp, tcp_estats_update_rcvd(tp, TCP_SKB_CB(skb)->end_seq));
+ 					tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+ 					NET_INC_STATS_BH(sock_net(sk), LINUX_MIB_TCPHPHITSTOUSER);
+ 				}
+@@ -5455,9 +5522,11 @@ int tcp_rcv_established(struct sock *sk, struct sk_buff *skb,
+ 				__skb_pull(skb, tcp_header_len);
+ 				__skb_queue_tail(&sk->sk_receive_queue, skb);
+ 				skb_set_owner_r(skb, sk);
++				TCP_ESTATS_UPDATE(tp, tcp_estats_update_rcvd(tp, TCP_SKB_CB(skb)->end_seq));
+ 				tp->rcv_nxt = TCP_SKB_CB(skb)->end_seq;
+ 			}
+ 
++			TCP_ESTATS_UPDATE(tp, tcp_estats_update_recvq(sk));
+ 			tcp_event_data_recv(sk, skb);
+ 
+ 			if (TCP_SKB_CB(skb)->ack_seq != tp->snd_una) {
+@@ -5514,6 +5583,8 @@ step5:
+ 
+ csum_error:
+ 	TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_INERRS);
++	TCP_ESTATS_VAR_INC(tp, SoftErrors);
++	TCP_ESTATS_VAR_SET(tp, SoftErrorReason, 7);
+ 
+ discard:
+ 	__kfree_skb(skb);
+@@ -5654,6 +5725,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
+ 
+ 		smp_mb();
+ 		tcp_set_state(sk, TCP_ESTABLISHED);
++		tcp_estats_establish(sk);
+ 
+ 		security_inet_conn_established(sk, skb);
+ 
+@@ -5874,6 +5946,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 				smp_mb();
+ 				tcp_set_state(sk, TCP_ESTABLISHED);
+ 				sk->sk_state_change(sk);
++				tcp_estats_establish(sk);
+ 
+ 				/* Note, that this wakeup is only for marginal
+ 				 * crossed SYN case. Passively open sockets
+diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
+index fd54c5f..110b309 100644
+--- a/net/ipv4/tcp_ipv4.c
++++ b/net/ipv4/tcp_ipv4.c
+@@ -232,7 +232,10 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+ 		inet_csk(sk)->icsk_ext_hdr_len = inet_opt->opt.optlen;
+ 
+ 	tp->rx_opt.mss_clamp = TCP_MSS_DEFAULT;
+-
++#ifdef CONFIG_TCP_ESTATS
++	tp->rx_opt.rec_mss = 0;
++#endif
++	
+ 	/* Socket identity is still unknown (sport may be zero).
+ 	 * However we set state to SYN-SENT and not releasing socket
+ 	 * lock select source port, enter ourselves into the hash tables and
+@@ -259,6 +262,8 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
+ 							   inet->inet_daddr,
+ 							   inet->inet_sport,
+ 							   usin->sin_port);
++	TCP_ESTATS_VAR_SET(tp, SndInitial, tp->write_seq);
++	TCP_ESTATS_VAR_SET(tp, SndMax, tp->write_seq);
+ 
+ 	inet->inet_id = tp->write_seq ^ jiffies;
+ 
+@@ -1300,6 +1305,7 @@ int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
+ 	tcp_clear_options(&tmp_opt);
+ 	tmp_opt.mss_clamp = TCP_MSS_DEFAULT;
+ 	tmp_opt.user_mss  = tp->rx_opt.user_mss;
++	tmp_opt.rec_mss = 0;
+ 	tcp_parse_options(skb, &tmp_opt, &hash_location, 0);
+ 
+ 	if (tmp_opt.cookie_plus > 0 &&
+@@ -1448,6 +1454,8 @@ struct sock *tcp_v4_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
+ 	if (!newsk)
+ 		goto exit_nonewsk;
+ 
++	tcp_estats_create(newsk, TCP_ESTATS_ADDRTYPE_IPV4);
++
+ 	newsk->sk_gso_type = SKB_GSO_TCPV4;
+ 
+ 	newtp		      = tcp_sk(newsk);
+@@ -1722,6 +1730,7 @@ process:
+ 	skb->dev = NULL;
+ 
+ 	bh_lock_sock_nested(sk);
++	TCP_ESTATS_UPDATE(tcp_sk(sk), tcp_estats_update_segrecv(tcp_sk(sk), skb));
+ 	ret = 0;
+ 	if (!sock_owned_by_user(sk)) {
+ #ifdef CONFIG_NET_DMA
+@@ -1741,6 +1750,7 @@ process:
+ 		NET_INC_STATS_BH(net, LINUX_MIB_TCPBACKLOGDROP);
+ 		goto discard_and_relse;
+ 	}
++	TCP_ESTATS_UPDATE(tcp_sk(sk), tcp_estats_update_finish_segrecv(tcp_sk(sk)));
+ 	bh_unlock_sock(sk);
+ 
+ 	sock_put(sk);
+@@ -1925,6 +1935,8 @@ static int tcp_v4_init_sock(struct sock *sk)
+ 	 */
+ 	sk->sk_sndbuf = sysctl_tcp_wmem[1];
+ 	sk->sk_rcvbuf = sysctl_tcp_rmem[1];
++	
++	tcp_estats_create(sk, TCP_ESTATS_ADDRTYPE_IPV4);
+ 
+ 	local_bh_disable();
+ 	sock_update_memcg(sk);
+@@ -1969,6 +1981,8 @@ void tcp_v4_destroy_sock(struct sock *sk)
+ 	if (inet_csk(sk)->icsk_bind_hash)
+ 		inet_put_port(sk);
+ 
++	tcp_estats_destroy(sk);
++
+ 	/*
+ 	 * If sendmsg cached page exists, toss it.
+ 	 */
+diff --git a/net/ipv4/tcp_minisocks.c b/net/ipv4/tcp_minisocks.c
+index 550e755..0daade0 100644
+--- a/net/ipv4/tcp_minisocks.c
++++ b/net/ipv4/tcp_minisocks.c
+@@ -552,6 +552,9 @@ struct sock *tcp_create_openreq_child(struct sock *sk, struct request_sock *req,
+ 		if (skb->len >= TCP_MSS_DEFAULT + newtp->tcp_header_len)
+ 			newicsk->icsk_ack.last_seg_size = skb->len - newtp->tcp_header_len;
+ 		newtp->rx_opt.mss_clamp = req->mss;
++#ifdef CONFIG_TCP_ESTATS
++		newtp->rx_opt.rec_mss = req->mss;
++#endif
+ 		TCP_ECN_openreq_child(newtp, req);
+ 
+ 		TCP_INC_STATS_BH(sock_net(sk), TCP_MIB_PASSIVEOPENS);
+diff --git a/net/ipv4/tcp_output.c b/net/ipv4/tcp_output.c
+index 4ff3b6d..fefd783 100644
+--- a/net/ipv4/tcp_output.c
++++ b/net/ipv4/tcp_output.c
+@@ -72,6 +72,7 @@ static void tcp_event_new_data_sent(struct sock *sk, const struct sk_buff *skb)
+ 
+ 	tcp_advance_send_head(sk, skb);
+ 	tp->snd_nxt = TCP_SKB_CB(skb)->end_seq;
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_snd_nxt(tp));
+ 
+ 	/* Don't override Nagle indefinitely with F-RTO */
+ 	if (tp->frto_counter == 2)
+@@ -275,6 +276,7 @@ static u16 tcp_select_window(struct sock *sk)
+ 	}
+ 	tp->rcv_wnd = new_win;
+ 	tp->rcv_wup = tp->rcv_nxt;
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_rwin_sent(tp));
+ 
+ 	/* Make sure we do not exceed the maximum possible
+ 	 * scaled window.
+@@ -897,15 +899,32 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
+ 	if (skb->len != tcp_header_size)
+ 		tcp_event_data_sent(tp, sk);
+ 
+-	if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq)
+-		TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS,
+-			      tcp_skb_pcount(skb));
++	{
++		/* If the skb isn't cloned, we can't reference it after
++		 * calling queue_xmit, so copy everything we need here. */
++		int pcount = tcp_skb_pcount(skb); 
++#ifdef CONFIG_TCP_ESTATS
++		int len = skb->len;
++		__u32 seq = TCP_SKB_CB(skb)->seq;
++		__u32 end_seq = TCP_SKB_CB(skb)->end_seq;
++		int flags = TCP_SKB_CB(skb)->tcp_flags;
++#endif
++
++		err = icsk->icsk_af_ops->queue_xmit(skb, &inet->cork.fl);
++		
++		if (err == 0) {
++			if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq)
++				TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS, pcount);
++			TCP_ESTATS_UPDATE(tp, tcp_estats_update_segsend(sk, len, pcount,
++									seq, end_seq, flags));
++		}
++	}
+ 
+-	err = icsk->icsk_af_ops->queue_xmit(skb, &inet->cork.fl);
+ 	if (likely(err <= 0))
+ 		return err;
+ 
+ 	tcp_enter_cwr(sk, 1);
++	TCP_ESTATS_VAR_INC(tp, SendStall);
+ 
+ 	return net_xmit_eval(err);
+ }
+@@ -1245,6 +1264,7 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
+ 	if (icsk->icsk_mtup.enabled)
+ 		mss_now = min(mss_now, tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_low));
+ 	tp->mss_cache = mss_now;
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_mss(tp));
+ 
+ 	return mss_now;
+ }
+@@ -1449,11 +1469,13 @@ static unsigned int tcp_snd_test(const struct sock *sk, struct sk_buff *skb,
+ 	tcp_init_tso_segs(sk, skb, cur_mss);
+ 
+ 	if (!tcp_nagle_test(tp, skb, cur_mss, nonagle))
+-		return 0;
++		return -TCP_ESTATS_SNDLIM_SENDER;
+ 
+ 	cwnd_quota = tcp_cwnd_test(tp, skb);
+-	if (cwnd_quota && !tcp_snd_wnd_test(tp, skb, cur_mss))
+-		cwnd_quota = 0;
++	if (!cwnd_quota)
++		return -TCP_ESTATS_SNDLIM_CWND;
++	if (!tcp_snd_wnd_test(tp, skb, cur_mss))
++		return -TCP_ESTATS_SNDLIM_RWIN;
+ 
+ 	return cwnd_quota;
+ }
+@@ -1467,7 +1489,7 @@ int tcp_may_send_now(struct sock *sk)
+ 	return skb &&
+ 		tcp_snd_test(sk, skb, tcp_current_mss(sk),
+ 			     (tcp_skb_is_last(sk, skb) ?
+-			      tp->nonagle : TCP_NAGLE_PUSH));
++			      tp->nonagle : TCP_NAGLE_PUSH)) > 0;
+ }
+ 
+ /* Trim TSO SKB to LEN bytes, put the remaining data into a new packet
+@@ -1746,6 +1768,7 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 	unsigned int tso_segs, sent_pkts;
+ 	int cwnd_quota;
+ 	int result;
++	int why = TCP_ESTATS_SNDLIM_NONE;
+ 
+ 	sent_pkts = 0;
+ 
+@@ -1766,20 +1789,28 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 		BUG_ON(!tso_segs);
+ 
+ 		cwnd_quota = tcp_cwnd_test(tp, skb);
+-		if (!cwnd_quota)
++		if (!cwnd_quota) {
++			why = TCP_ESTATS_SNDLIM_CWND;
+ 			break;
++		}
+ 
+-		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now)))
++		if (unlikely(!tcp_snd_wnd_test(tp, skb, mss_now))) {
++			why = TCP_ESTATS_SNDLIM_RWIN;
+ 			break;
++		}
+ 
+ 		if (tso_segs == 1) {
+ 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
+ 						     (tcp_skb_is_last(sk, skb) ?
+-						      nonagle : TCP_NAGLE_PUSH))))
++						      nonagle : TCP_NAGLE_PUSH)))) {
++				why = TCP_ESTATS_SNDLIM_SENDER;
+ 				break;
++			}
+ 		} else {
+-			if (!push_one && tcp_tso_should_defer(sk, skb))
++			if (!push_one && tcp_tso_should_defer(sk, skb)) {
++				why = TCP_ESTATS_SNDLIM_CWND;
+ 				break;
++			}
+ 		}
+ 
+ 		limit = mss_now;
+@@ -1788,13 +1819,17 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 						    cwnd_quota);
+ 
+ 		if (skb->len > limit &&
+-		    unlikely(tso_fragment(sk, skb, limit, mss_now, gfp)))
++		    unlikely(tso_fragment(sk, skb, limit, mss_now, gfp))) {
++			why = TCP_ESTATS_SNDLIM_SENDER;
+ 			break;
++		}
+ 
+ 		TCP_SKB_CB(skb)->when = tcp_time_stamp;
+ 
+-		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp)))
++		if (unlikely(tcp_transmit_skb(sk, skb, 1, gfp))) {
++			why = TCP_ESTATS_SNDLIM_SENDER;
+ 			break;
++		}
+ 
+ 		/* Advance the send_head.  This one is sent out.
+ 		 * This call will increment packets_out.
+@@ -1810,6 +1845,10 @@ static int tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
+ 	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Recovery)
+ 		tp->prr_out += sent_pkts;
+ 
++	if (why == TCP_ESTATS_SNDLIM_NONE)
++		why = TCP_ESTATS_SNDLIM_SENDER;
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_sndlim(tp, why));
++
+ 	if (likely(sent_pkts)) {
+ 		tcp_cwnd_validate(sk);
+ 		return 0;
+@@ -2659,6 +2698,7 @@ int tcp_connect(struct sock *sk)
+ 	 * in order to make this packet get counted in tcpOutSegs.
+ 	 */
+ 	tp->snd_nxt = tp->write_seq;
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_snd_nxt(tp));
+ 	tp->pushed_seq = tp->write_seq;
+ 	TCP_INC_STATS(sock_net(sk), TCP_MIB_ACTIVEOPENS);
+ 
+diff --git a/net/ipv4/tcp_timer.c b/net/ipv4/tcp_timer.c
+index cd2e072..378fafb 100644
+--- a/net/ipv4/tcp_timer.c
++++ b/net/ipv4/tcp_timer.c
+@@ -301,6 +301,7 @@ static void tcp_probe_timer(struct sock *sk)
+ 		if (tcp_out_of_resources(sk, alive || icsk->icsk_probes_out <= max_probes))
+ 			return;
+ 	}
++	TCP_ESTATS_UPDATE(tp, tcp_estats_update_timeout(sk));
+ 
+ 	if (icsk->icsk_probes_out > max_probes) {
+ 		tcp_write_err(sk);
+diff --git a/net/ipv6/tcp_ipv6.c b/net/ipv6/tcp_ipv6.c
+index 3edd05a..f801a61 100644
+--- a/net/ipv6/tcp_ipv6.c
++++ b/net/ipv6/tcp_ipv6.c
+@@ -300,6 +300,9 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
+ 					  np->opt->opt_nflen);
+ 
+ 	tp->rx_opt.mss_clamp = IPV6_MIN_MTU - sizeof(struct tcphdr) - sizeof(struct ipv6hdr);
++#ifdef CONFIG_TCP_ESTATS
++	tp->rx_opt.rec_mss = 0;
++#endif
+ 
+ 	inet->inet_dport = usin->sin6_port;
+ 
+@@ -314,6 +317,9 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
+ 							     inet->inet_sport,
+ 							     inet->inet_dport);
+ 
++	TCP_ESTATS_VAR_SET(tp, SndInitial, tp->write_seq);
++	TCP_ESTATS_VAR_SET(tp, SndMax, tp->write_seq);
++
+ 	err = tcp_connect(sk);
+ 	if (err)
+ 		goto late_failure;
+@@ -1197,6 +1203,7 @@ static int tcp_v6_conn_request(struct sock *sk, struct sk_buff *skb)
+ 	tcp_clear_options(&tmp_opt);
+ 	tmp_opt.mss_clamp = IPV6_MIN_MTU - sizeof(struct tcphdr) - sizeof(struct ipv6hdr);
+ 	tmp_opt.user_mss = tp->rx_opt.user_mss;
++	tmp_opt.rec_mss = 0;
+ 	tcp_parse_options(skb, &tmp_opt, &hash_location, 0);
+ 
+ 	if (tmp_opt.cookie_plus > 0 &&
+@@ -1426,6 +1433,8 @@ static struct sock * tcp_v6_syn_recv_sock(struct sock *sk, struct sk_buff *skb,
+ 	if (newsk == NULL)
+ 		goto out_nonewsk;
+ 
++	tcp_estats_create(newsk, TCP_ESTATS_ADDRTYPE_IPV6);
++
+ 	/*
+ 	 * No need to charge this sock to the relevant IPv6 refcnt debug socks
+ 	 * count here, tcp_create_openreq_child now does this for us, see the
+@@ -1750,6 +1759,7 @@ process:
+ 	skb->dev = NULL;
+ 
+ 	bh_lock_sock_nested(sk);
++	TCP_ESTATS_UPDATE(tcp_sk(sk), tcp_estats_update_segrecv(tcp_sk(sk), skb));
+ 	ret = 0;
+ 	if (!sock_owned_by_user(sk)) {
+ #ifdef CONFIG_NET_DMA
+@@ -1769,6 +1779,7 @@ process:
+ 		NET_INC_STATS_BH(net, LINUX_MIB_TCPBACKLOGDROP);
+ 		goto discard_and_relse;
+ 	}
++	TCP_ESTATS_UPDATE(tcp_sk(sk), tcp_estats_update_finish_segrecv(tcp_sk(sk)));
+ 	bh_unlock_sock(sk);
+ 
+ 	sock_put(sk);
+@@ -1993,6 +2004,8 @@ static int tcp_v6_init_sock(struct sock *sk)
+ 	 */
+ 	sk->sk_sndbuf = sysctl_tcp_wmem[1];
+ 	sk->sk_rcvbuf = sysctl_tcp_rmem[1];
++	
++	tcp_estats_create(sk, TCP_ESTATS_ADDRTYPE_IPV6);
+ 
+ 	local_bh_disable();
+ 	sock_update_memcg(sk);

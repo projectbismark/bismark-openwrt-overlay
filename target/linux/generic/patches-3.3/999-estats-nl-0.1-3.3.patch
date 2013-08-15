@@ -1,0 +1,12 @@
+diff --git a/net/ipv4/tcp.c b/tmp/tcp.c
+index f050487..bf6e3cc 100644
+--- a/net/ipv4/tcp.c
++++ b/tmp/tcp.c
+@@ -850,6 +850,7 @@ wait_for_sndbuf:
+ 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+ wait_for_memory:
+ 		tcp_push(sk, flags & ~MSG_MORE, mss_now, TCP_NAGLE_PUSH);
++		TCP_ESTATS_UPDATE(tp, tcp_estats_update_writeq(sk));
+ 
+ 		if ((err = sk_stream_wait_memory(sk, &timeo)) != 0)
+ 			goto do_error;

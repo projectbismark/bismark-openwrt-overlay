@@ -96,7 +96,7 @@ done
 
 sed -e 's|opkg/host|opkg-bismark/host|g' -i package/base-files/Makefile
 # Start building
-make # use -j 4 only for subsequent builds. usually doesn't work the first time.
+make #-j 4 only for subsequent builds. usually doesn't work the first time.
 
 # Uncomment one of the following depending on whether you're making a base
 # build or an updates build.

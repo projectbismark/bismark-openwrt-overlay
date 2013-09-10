@@ -9,7 +9,7 @@
 # where BUILDROOT is something like "lancre"
 
 # Build parameters
-BISMARK_RELEASE="lancre-rc1"
+BISMARK_RELEASE="lancre-rc3"
 DEPLOY_ROOT=/data/users/bismark/downloads
 OPENWRT_TAG="attitude_adjustment_12.09"
 FEEDS_BISMARK_PACKAGES_REV="HEAD"

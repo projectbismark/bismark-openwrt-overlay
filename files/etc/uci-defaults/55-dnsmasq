@@ -1,0 +1,6 @@
+#!/bin/sh
+
+if [ -z `uci -q get dhcp.@dnsmasq[0].interface_name` ]; then
+	uci -q set dhcp.@dnsmasq[0].interface_name=myrouter.projectbismark.net,br-lan
+	uci commit
+fi

@@ -9,11 +9,13 @@
 # where BUILDROOT is something like "lancre"
 
 # Build parameters
-BISMARK_RELEASE="lancre-rc3"
+BISMARK_RELEASE="lancre-rc4"
 DEPLOY_ROOT=/data/users/bismark/downloads
-OPENWRT_TAG="attitude_adjustment_12.09"
+#OPENWRT_TAG="attitude_adjustment_12.09"
+OPENWRT_SVN_REV="38248"
 FEEDS_BISMARK_PACKAGES_REV="HEAD"
 FEEDS_LUCI_BISMARK_REV="HEAD"
+FEEDS_LUCI_SVN_REV="9911"
 
 # DON'T CHANGE THINGS BELOW HERE UNLESS YOU KNOW WHAT YOU'RE DOING
 
@@ -68,21 +70,27 @@ param_files="files/etc/issue
              files/etc/opkg.conf"
 
 # Checkout buildroot
-svn co svn://svn.openwrt.org/openwrt/tags/$OPENWRT_TAG . --force
+#svn co svn://svn.openwrt.org/openwrt/tags/$OPENWRT_TAG . --force
+sed -i "s|OPENWRT_SVN_REV|$OPENWRT_SVN_REV|g; \
+	s|PWD|$PWD|g;\
+	s|FEEDS_LUCI_SVN_REV|$FEEDS_LUCI_SVN_REV|g;" feeds.conf
+
+svn co -r $OPENWRT_SVN_REV svn://svn.openwrt.org/openwrt/branches/attitude_adjustment . --force
 
 # Clone BISmark package repos
 mkdir -p bismark-feeds
-git_checkout bismark-feeds/bismark-packages \
+git_checkout bismark-feeds/bismark\
              git://github.com/projectbismark/bismark-packages.git \
              $FEEDS_BISMARK_PACKAGES_REV
-git_checkout bismark-feeds/luci-bismark \
-             git://github.com/shahifaqeer/luci-0.11.git \
-             $FEEDS_LUCI_BISMARK_REV
+#git_checkout bismark-feeds/luci-bismark \
+#             git://github.com/shahifaqeer/luci-0.11.git \
+#             $FEEDS_LUCI_BISMARK_REV
 
 # Prepare buildroot
 ./scripts/feeds update
 git checkout -- .config
 ./scripts/feeds install -a
+make defconfig ###TEMPORARY ONLY - remove after bismark stuff has been ported to luci
 
 # Substitute parameters in each of param_files
 for file in $param_files; do

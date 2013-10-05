@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+BASEDIR="$PWD"
+ENVDIR="$PWD/env-bismark"
+
+usage() {
+	cat <<EOF
+Usage: $0 [options] <command> [arguments]
+Commands:
+	help              This help text
+	list              List environments
+	clear             Delete all environment and revert to flat config/files
+	new <name>        Create a new environment
+	switch <name>     Switch to a different environment
+	delete <name>     Delete an environment
+	rename <newname>  Rename the current environment
+	diff              Show differences between current state and environment
+	save              Save your changes to the environment
+	revert            Revert your changes since last save
+
+Options:
+
+EOF
+	exit ${1:-1}
+}
+
+managed_env() {
+	cnfig=0
+	files=0
+	[ ! -L .config ] && cnfig=1
+	[ ! -L files ] && files=2
+	echo $(expr $cnfig + $files)
+}
+
+exists_env() {
+	local NAME=$1
+	cnfig=0
+	files=0
+	[ -e $ENVDIR/.config-$NAME ] && cnfig=1
+	[ -e $ENVDIR/files-$NAME ] && files=2
+	echo $(expr $cnfig + $files)
+}
+
+env_new() {
+	local NAME=$1
+	if [ -z $NAME ]; then
+		usage
+		#echo -e "\nEnvironment name variable is empty. Not creating.\n"
+		#exit
+	fi
+	case $(exists_env $NAME) in
+	3)
+		echo -e "\nEnvironment $NAME already exists. Not creating.\n"
+		exit
+		;;
+	[12])
+		echo -e "\nPartial environment $NAME exists. Not creating.\n"
+		exit
+		;;
+	0)
+		echo -e "\nCloning new environment $NAME from current environment\n"
+		mkdir -p $ENVDIR
+
+		case $(managed_env) in
+		0)
+			cp `readlink -f .config` $ENVDIR/.config-$NAME
+			cp -r `readlink -f files` $ENVDIR/files-$NAME
+			;;
+		[13])
+			echo -e "Current config does not seem to be a managed environment. Renaming and moving it to $ENVDIR\n"
+			mv .config $ENVDIR/.config-$NAME
+			;;
+		[23])
+			echo -e "Current files directory does not seem to be a managed environment. Renaming and moving it to $ENVDIR\n"
+			mv files $ENVDIR/files-$NAME
+			;;
+		esac
+		rm -f .config files
+		ln -s $ENVDIR/.config-$NAME .config
+		ln -s $ENVDIR/files-$NAME files
+	esac
+}
+
+env_list() {
+	local NAME=$1
+	echo -e '\nFull environments ("*" denotes active environment):'
+	for name in $(ls $ENVDIR/.config-* 2>/dev/null); do
+		local envname=$(echo $name | awk -F'config-' '{print $2}')
+		local iscurrent=''
+		if [ $(basename $name) == $(basename $(readlink -f .config)) ]; then
+			iscurrent='*'
+		fi
+		if [ -e $ENVDIR/files-$envname ]; then
+			echo -e "$iscurrent\t$envname"
+		fi
+	done
+	echo ""
+}
+
+env_switch() {
+	local NAME=$1
+	if [ -z $NAME ]; then
+		usage
+	fi
+	case $(exists_env $NAME) in 
+	3)
+		if [ $(managed_env) -gt 0 ]; then
+			echo "Current environment is not managed. Create new environment first.\n"
+		else
+			echo "Switching to $NAME"
+			echo ""
+			rm -f .config files
+			ln -s $ENVDIR/.config-$NAME .config
+			ln -s $ENVDIR/files-$NAME files
+		fi
+		;;
+	[12])
+		echo -e "\nNot switching to partial environment $NAME. Delete $NAME and create new environment.\n"
+		;;
+	0)
+		echo -e "\nEnvironment $NAME does not exist. Create new environment.\n"
+		;;
+	esac
+}
+
+env_delete() {
+	local NAME=$1
+	if [ -z $NAME ]; then
+		usage
+	fi
+	case $(exists_env $NAME) in 
+	3)
+		if [ $(basename $(readlink -f .config)) == $(basename $ENVDIR/.config-$NAME) ]; then
+			echo -e "\nEnvironment $NAME is active. Switch to another environment first before deleting $NAME.\n"
+		else
+			echo -e "\nDeleting environment $NAME\n"
+			rm $ENVDIR/.config-$NAME
+			rm -r $ENVDIR/files-$NAME
+		fi
+		;;
+	[12])
+		echo -e "\nDeleting environment $NAME\n"
+		rm -f $ENVDIR/.config-$NAME
+		rm -rf $ENVDIR/files-$NAME
+		;;
+	0)
+		echo -e "\nEnvironment $NAME does not exist.\n"
+		;;
+	esac
+			
+}
+
+env_clear(){
+	echo -e "\nNot implemented.\n"
+}
+
+env_rename(){
+	echo -e "\nNot implemented.\n"
+}
+
+env_diff(){
+	echo -e "\nNot implemented.\n"
+}
+
+env_revert(){
+	echo -e "\nNot implemented.\n"
+}
+
+env_save(){
+	echo -e "\nNot implemented.\n"
+}
+
+COMMAND="$1"; shift
+case "$COMMAND" in
+	help) usage 0;;
+	new) env_new "$@";;
+	list) env_list "$@";;
+	clear) env_clear "$@";;
+	switch) env_switch "$@";;
+	delete) env_delete "$@";;
+	rename) env_rename "$@";;
+	diff) env_diff "$@";;
+	save) env_save "$@";;
+	revert) env_revert "$@";;
+	*) usage;;
+esac

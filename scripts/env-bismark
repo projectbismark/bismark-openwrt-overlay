@@ -35,8 +35,8 @@ exists_env() {
 	local NAME=$1
 	cnfig=0
 	files=0
-	[ -e $ENVDIR/.config-$NAME ] && cnfig=1
-	[ -e $ENVDIR/files-$NAME ] && files=2
+	[ -e $ENVDIR/$NAME/.config ] && cnfig=1
+	[ -e $ENVDIR/$NAME/files ] && files=2
 	echo $(expr $cnfig + $files)
 }
 
@@ -58,39 +58,39 @@ env_new() {
 		;;
 	0)
 		echo -e "\nCloning new environment $NAME from current environment\n"
-		mkdir -p $ENVDIR
+		mkdir -p $ENVDIR/$NAME
 
 		case $(managed_env) in
 		0)
-			cp `readlink -f .config` $ENVDIR/.config-$NAME
-			cp -r `readlink -f files` $ENVDIR/files-$NAME
+			cp `readlink -f .config` $ENVDIR/$NAME/.config
+			cp -r `readlink -f files` $ENVDIR/$NAME/files
 			;;
 		[13])
 			echo -e "Current config does not seem to be a managed environment. Renaming and moving it to $ENVDIR\n"
-			mv .config $ENVDIR/.config-$NAME
+			mv .config $ENVDIR/$NAME/.config
 			;;
 		[23])
 			echo -e "Current files directory does not seem to be a managed environment. Renaming and moving it to $ENVDIR\n"
-			mv files $ENVDIR/files-$NAME
+			mv files $ENVDIR/$NAME/files
 			;;
 		esac
 		rm -f .config files
-		ln -s $ENVDIR/.config-$NAME .config
-		ln -s $ENVDIR/files-$NAME files
+		ln -s $ENVDIR/$NAME/.config .config
+		ln -s $ENVDIR/$NAME/files files
 	esac
 }
 
 env_list() {
 	local NAME=$1
 	echo -e '\nFull environments ("*" denotes active environment):'
-	for name in $(ls $ENVDIR/.config-* 2>/dev/null); do
-		local envname=$(echo $name | awk -F'config-' '{print $2}')
-		local iscurrent=''
-		if [ $(basename $name) == $(basename $(readlink -f .config)) ]; then
-			iscurrent='*'
-		fi
-		if [ -e $ENVDIR/files-$envname ]; then
-			echo -e "$iscurrent\t$envname"
+	for name in $(find $ENVDIR  -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do
+		local envname=$(basename $name)
+		if [ -e $name/files -a -e $name/.config ]; then
+			if [ $(readlink -f $name/.config) == $(readlink -f .config) ]; then
+				echo -e '*'"\t$envname"
+			else
+				echo -e "\t$envname"
+			fi
 		fi
 	done
 	echo ""
@@ -109,8 +109,8 @@ env_switch() {
 			echo "Switching to $NAME"
 			echo ""
 			rm -f .config files
-			ln -s $ENVDIR/.config-$NAME .config
-			ln -s $ENVDIR/files-$NAME files
+			ln -s $ENVDIR/$NAME/.config .config
+			ln -s $ENVDIR/$NAME/files files
 		fi
 		;;
 	[12])
@@ -129,18 +129,20 @@ env_delete() {
 	fi
 	case $(exists_env $NAME) in 
 	3)
-		if [ $(basename $(readlink -f .config)) == $(basename $ENVDIR/.config-$NAME) ]; then
+		if [ $(readlink -f .config) == $ENVDIR/$NAME/.config ]; then
 			echo -e "\nEnvironment $NAME is active. Switch to another environment first before deleting $NAME.\n"
 		else
 			echo -e "\nDeleting environment $NAME\n"
-			rm $ENVDIR/.config-$NAME
-			rm -r $ENVDIR/files-$NAME
+			rm $ENVDIR/$NAME/.config
+			rm -r $ENVDIR/$NAME/files
+			rmdir $ENVDIR/$NAME
 		fi
 		;;
 	[12])
 		echo -e "\nDeleting environment $NAME\n"
-		rm -f $ENVDIR/.config-$NAME
-		rm -rf $ENVDIR/files-$NAME
+		rm -f $ENVDIR/$NAME/.config
+		rm -rf $ENVDIR/$NAME/files
+		rmdir $ENVDIR/$NAME
 		;;
 	0)
 		echo -e "\nEnvironment $NAME does not exist.\n"

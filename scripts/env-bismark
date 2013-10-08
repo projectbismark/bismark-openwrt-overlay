@@ -62,8 +62,8 @@ env_new() {
 
 		case $(managed_env) in
 		0)
-			cp `readlink -f .config` $ENVDIR/$NAME/.config
-			cp -r `readlink -f files` $ENVDIR/$NAME/files
+			cp $(readlink -f .config) $ENVDIR/$NAME/.config
+			cp -r $(readlink -f files) $ENVDIR/$NAME/files
 			;;
 		[13])
 			echo -e "Current config does not seem to be a managed environment. Renaming and moving it to $ENVDIR\n"
@@ -74,9 +74,14 @@ env_new() {
 			mv files $ENVDIR/$NAME/files
 			;;
 		esac
+		#rm -f .config files
+		rm -f $ENVDIR/current
+		ln -s $ENVDIR/$NAME/ $ENVDIR/current
 		rm -f .config files
-		ln -s $ENVDIR/$NAME/.config .config
-		ln -s $ENVDIR/$NAME/files files
+		ln -s $ENVDIR/current/.config .config
+		ln -s $ENVDIR/current/files files
+		#ln -s $ENVDIR/$NAME/.config .config
+		#ln -s $ENVDIR/$NAME/files files
 	esac
 }
 
@@ -85,8 +90,10 @@ env_list() {
 	echo -e '\nFull environments ("*" denotes active environment):'
 	for name in $(find $ENVDIR  -mindepth 1 -maxdepth 1 -type d 2>/dev/null); do
 		local envname=$(basename $name)
-		if [ -e $name/files -a -e $name/.config ]; then
-			if [ $(readlink -f $name/.config) == $(readlink -f .config) ]; then
+		
+		if [ $envname != 'current' -a $(exists_env $envname) == 3 ]; then
+			#echo $(basename $(readlink -f $ENVDIR/current))  $(basename $name)
+			if [ $(basename $(readlink -f $ENVDIR/current)) == $(basename $name) ]; then
 				echo -e '*'"\t$envname"
 			else
 				echo -e "\t$envname"
@@ -106,11 +113,14 @@ env_switch() {
 		if [ $(managed_env) -gt 0 ]; then
 			echo "Current environment is not managed. Create new environment first.\n"
 		else
+			env_save
 			echo "Switching to $NAME"
 			echo ""
-			rm -f .config files
-			ln -s $ENVDIR/$NAME/.config .config
-			ln -s $ENVDIR/$NAME/files files
+			rm $ENVDIR/current
+			ln -s $ENVDIR/$NAME $ENVDIR/current
+			#rm -f .config files
+			#ln -s $ENVDIR/$NAME/.config .config
+			#ln -s $ENVDIR/$NAME/files files
 		fi
 		;;
 	[12])
@@ -129,7 +139,7 @@ env_delete() {
 	fi
 	case $(exists_env $NAME) in 
 	3)
-		if [ $(readlink -f .config) == $ENVDIR/$NAME/.config ]; then
+		if [ $(readlink -f $ENVDIR/current) == $ENVDIR/$NAME ]; then
 			echo -e "\nEnvironment $NAME is active. Switch to another environment first before deleting $NAME.\n"
 		else
 			echo -e "\nDeleting environment $NAME\n"
@@ -168,7 +178,13 @@ env_revert(){
 }
 
 env_save(){
-	echo -e "\nNot implemented.\n"
+	echo -e "\nSaving current environment\n"
+	if [ ! -L .config ]; then
+		rm -f .config.old
+		cp $(readlink -f $ENVDIR/current/.config) .config.old
+		mv .config $(readlink -f $ENVDIR/current/.config)
+		ln -s $ENVDIR/current/.config .config
+	fi
 }
 
 COMMAND="$1"; shift

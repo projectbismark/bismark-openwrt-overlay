@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 BASEDIR="$PWD"
-ENVDIR="$PWD/env-bismark"
+ENVDIR="./env-bismark"
 
 usage() {
 	cat <<EOF
@@ -75,8 +75,11 @@ env_new() {
 			;;
 		esac
 		#rm -f .config files
-		rm -f $ENVDIR/current
-		ln -s $ENVDIR/$NAME/ $ENVDIR/current
+
+		cd $ENVDIR
+		rm -f current
+		ln -s $NAME/ current
+		cd $BASEDIR
 		rm -f .config files
 		ln -s $ENVDIR/current/.config .config
 		ln -s $ENVDIR/current/files files
@@ -116,8 +119,10 @@ env_switch() {
 			env_save
 			echo "Switching to $NAME"
 			echo ""
-			rm $ENVDIR/current
-			ln -s $ENVDIR/$NAME $ENVDIR/current
+			cd $ENVDIR
+			rm current
+			ln -s $NAME current
+			cd $BASEDIR
 			#rm -f .config files
 			#ln -s $ENVDIR/$NAME/.config .config
 			#ln -s $ENVDIR/$NAME/files files
@@ -139,7 +144,7 @@ env_delete() {
 	fi
 	case $(exists_env $NAME) in 
 	3)
-		if [ $(readlink -f $ENVDIR/current) == $ENVDIR/$NAME ]; then
+		if [ $(basename $(readlink -f $ENVDIR/current)) == $NAME ]; then
 			echo -e "\nEnvironment $NAME is active. Switch to another environment first before deleting $NAME.\n"
 		else
 			echo -e "\nDeleting environment $NAME\n"

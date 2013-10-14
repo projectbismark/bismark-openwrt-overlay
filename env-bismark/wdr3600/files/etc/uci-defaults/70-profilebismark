@@ -1,7 +1,7 @@
 #!/bin/sh
 
-[ -n "$(uci -q show profile_bismark" ] || {
-	uci set profile_bismark.community=community
+[ -n "$(uci -q show profile_bismark") ] || {
+  uci set profile_bismark.community=community
   uci set profile_bismark.community.name=Project BISmark
   uci set profile_bismark.community.homepage=http://myrouter.projectbismark.net
   uci commit

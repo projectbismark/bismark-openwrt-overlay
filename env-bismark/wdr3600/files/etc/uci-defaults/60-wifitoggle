@@ -1,0 +1,13 @@
+#!/bin/bash
+
+if [ "$(uci -q get wifitoggle.@wifitoggle[0].button)" != 'BTN_2' ]; then
+  uci set wifitoggle.@wifitoggle[0]=wifitoggle                                  
+  uci set wifitoggle.@wifitoggle[0].button=BTN_2                                
+  uci set wifitoggle.@wifitoggle[0].persistent=0                                
+  uci set wifitoggle.@wifitoggle[0].timer=0                                     
+  uci set wifitoggle.@wifitoggle[0].led_sysfs=wrt160nl:amber:wps                
+  uci set wifitoggle.@wifitoggle[0].led_enable_trigger=timer    
+  uci set wifitoggle.@wifitoggle[0].led_enable_delayon=500      
+  uci set wifitoggle.@wifitoggle[0].led_enable_delayoff=500     
+  uci set wifitoggle.@wifitoggle[0].led_disable_default=0       
+fi

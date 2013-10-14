@@ -88,13 +88,13 @@ git_checkout bismark-feeds/bismark\
 
 # Prepare buildroot
 ./scripts/feeds update
-git checkout -- .config
+git checkout -- $(readlink -f .config)
 ./scripts/feeds install -a
-make defconfig ###TEMPORARY ONLY - remove after bismark stuff has been ported to luci
+#make defconfig ###TEMPORARY ONLY - remove after bismark stuff has been ported to luci
 
 # Substitute parameters in each of param_files
 for file in $param_files; do
-    git checkout -- $file
+    git checkout -- $(readlink -f $file)
     sed -i "s/BISMARK-RELEASE/$BISMARK_RELEASE/g; \
             s/BISMARK-PRETTY-RELEASE/$BISMARK_PRETTY_RELEASE/g; \
             s/BISMARK-HASH/$BISMARK_HASH/g; \

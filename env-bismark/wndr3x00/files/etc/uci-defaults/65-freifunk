@@ -1,6 +1,6 @@
 #!/bin/sh
 
-[ -n "$(uci -q show freifunk.community" ] || {
+[ -n "$(uci -q show freifunk.community)" ] || {
   uci set freifunk.community=community
   uci set freifunk.community.name=bismark
   uci commit

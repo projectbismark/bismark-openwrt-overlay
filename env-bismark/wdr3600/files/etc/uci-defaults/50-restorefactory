@@ -1,11 +1,11 @@
 #!/bin/sh
 
-[ -n "$(uci -q show system.@restorefactory[0])" ] || {
+if [ "$(uci -q get system.@restorefactory[0].button)" != 'BTN_0' ]; then
 	uci add system restorefactory
 	#uci set system.@restorefactory[0].button=reset
 	uci set system.@restorefactory[0].button=BTN_0
 	uci set system.@restorefactory[0].action=pressed
 	uci set system.@restorefactory[0].timeout=5
 	uci commit
-}
+fi
 

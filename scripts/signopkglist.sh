@@ -1,35 +1,35 @@
 #!/bin/bash
 
-O="/O=Georgia Tech Network Operations and Internet Security Lab/OU=Project Bismark"           
-CN="/CN=downloads.projectbismark.net"                                                                                 
-EA="/emailAddress = ssl-admin@projectbismark.net"                                                                                  
+O="/O=Georgia Tech Network Operations and Internet Security Lab/OU=Project Bismark"
+CN="/CN=downloads.projectbismark.net"
+EA="/emailAddress = ssl-admin@projectbismark.net"  
 
-CERTNAME=opkgcert.pem                                                                                                     
-PUBKEY=opkgpub.key                                                                                                           
+CERTNAME=opkgcert.pem
+PUBKEY=serverCA.pem
 
-if [ "$#" -ne 3 ]; then                                                                                                            
-    echo "usage: signopkglist.sh <path-to-Packages-list-file> <name-for-private-key> <name-for-public-key>"                        
-    echo "example: sighopkglist.sh /path/to/Packages opkgcert.pem opkgpub.key"                      
-    exit 1                                                                                                                         
-fi                                                                                                                                 
+#generate both pub & priv keys in PEM format
+openssl req -x509 -nodes -days 1800 \
+  -subj "/C=US/ST=Georgia/L=Atlanta/$O$CN$EA" \
+  -newkey rsa:2048 -keyout $CERTNAME -out $CERTNAME
 
-CERTNAME=$2                                                                                                                     
-PUBKEY=$3                                                                                                                          
+openssl verify $CERTNAME
 
-if [ ! -e $1 ]; then                                                                                                               
-    echo "Package file $1 does not exist"                                                                                  
-    exit 1                                                                                                                         
-fi                                                                                                                                 
-
-#generate both pub & priv keys in PEM format                                                                              
-openssl req -x509 -nodes -days 1800 \                                                                                     
-  -subj "/C=US/ST=Georgia/L=Atlanta/$O$CN$EA" \                                                                 
-  -newkey rsa:2048 -keyout $CERTNAME -out $CERTNAME                                                                                                                                                                                        
-
-openssl verify $CERTNAME                                                                                                                                                                                                                                        
-
-#sign files list                                                                                                                   
-openssl smime -sign -in $1 -signer $CERTNAME -binary -outform PEM -out $1.sig                       
 
 #extract public key from CERTNAME file                                                                                  
 openssl x509 -in $CERTNAME -pubkey -outform PEM -out $PUBKEY 
+
+gunzip $(find $1 -name Packages.gz)
+
+list=$(find $1 -name Packages)
+
+for i in $list
+do
+    openssl smime -sign -in $i -signer $CERTNAME -binary -outform PEM -out $i.sig
+done
+
+gzip $(find $1 -name Packages)
+
+#extract public key from CERTNAME file
+openssl x509 -in $CERTNAME -pubkey -outform PEM -out $PUBKEY
+
+echo "** Please, update the $PUBKEY key in bismark-opkg-keys package. **"

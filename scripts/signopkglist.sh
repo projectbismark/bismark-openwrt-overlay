@@ -1,38 +1,37 @@
 #!/bin/bash
 
-O="O=Georgia Tech Network Operations and Internet Security Lab/OU=Project Bismark/"
-CN="CN=downloads.projectbismark.net/"
-EA="emailAddress=ssl-admin@projectbismark.net"  
-
-SSLDIR=ssl
-
-CERTNAME=opkgcert.pem
+CERTNAME=bismark_signing_key.pem
+CERTPATH=$HOME/.$CERTNAME
 PUBKEY=serverCA.pem
+PUBKEYPATH=bismark-feeds/bismark/utils/bismark-opkg-keys/files/etc/ssl
 
-#using existing keys to sign pkgs
-if [ ! -f $SSLDIR/$PUBKEY ];
+echo "Checking for signer certificate in [$CERTPATH]"
+
+if [ -f $CERTPATH ];
 then
-   echo "Public key NOT found. Generating certificate and public key in $SSLDIR directory..."
-
-   mkdir -p $SSLDIR
-
-   #generate both pub & priv keys in PEM format
-   openssl req -x509 -nodes -days 1800 \
-     -subj "/C=US/ST=Georgia/L=Atlanta/$O$CN$EA" \
-     -newkey rsa:2048 -keyout $SSLDIR/$CERTNAME -out $SSLDIR/$CERTNAME
-
-   openssl verify $SSLDIR/$CERTNAME
+   echo "FOUND. Checking bismark-opkg-keys for server's pubkey ..."
+   openssl verify $CERTPATH
 
    #extract public key from CERTNAME file
-   openssl x509 -in $SSLDIR/$CERTNAME -pubkey -outform PEM -out $SSLDIR/$PUBKEY
+   openssl x509 -in $CERTPATH -pubkey -outform PEM -out $PUBKEY
+
+   if [ -f $PUBKEYPATH/$PUBKEY ];
+   then
+      echo "FOUND in [$PUBKEYPATH/$PUBKEY]..."
+      if diff -q $PUBKEY $PUBKEYPATH/$PUBKEY > /dev/null ;
+      then
+         echo "Public keys MATCHED in bismark-opkg-keys package, nothing to do."
+      else
+         echo "Public keys DIFFER. Updating in [$PUBKEYPATH/$PUBKEY], Please re-run deploy-release.sh to update bismark-opkg-keys package."
+         mv $PUBKEY $PUBKEYPATH/$PUBKEY
+      fi
+
+      for filename in $(find $1 -name Packages.gz); do
+         zcat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename}| cut -d"." -f1).sig
+      done
+   else
+      echo "NOT FOUND. Isn't the Package bismark-opkg-keys installed ?"
+   fi
 else
-   echo "Public key found: $SSLDIR/$PUBKEY. Continuing package signing..."
+   echo "NOT FOUND. Not signing packages list. Please run generatecert.sh script to generate self-signed certificate."
 fi
-
-
-for filename in $(find $1 -name Packages.gz); do
-    zcat $filename | openssl smime -sign -signer $SSLDIR/$CERTNAME -binary -outform PEM -out $(echo ${filename}| cut -d"." -f1).sig
-done
-
-
-echo "** Please, update the $SSLDIR/$PUBKEY key in bismark-opkg-keys package. **"

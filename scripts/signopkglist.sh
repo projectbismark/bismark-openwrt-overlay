@@ -22,8 +22,9 @@ then
       then
          echo "Public keys MATCHED in bismark-opkg-keys package, nothing to do."
       else
-         echo "Public keys DIFFER. Updating in [$PUBKEYPATH/$PUBKEY], Please re-run deploy-release.sh to update bismark-opkg-keys package."
-         mv $PUBKEY $PUBKEYPATH/$PUBKEY
+         echo "Public keys DIFFER [$PUBKEY] [$PUBKEYPATH/$PUBKEY]. Not signing packages list."
+         echo "Please consider update bismark-opkg-keys package with the new key and rebuild Bismark image."
+         exit 1
       fi
 
       for filename in $(find $1 -name Packages.gz); do

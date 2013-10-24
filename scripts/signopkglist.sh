@@ -28,7 +28,7 @@ then
       fi
 
       for filename in $(find $1 -name Packages.gz); do
-         zcat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename}| cut -d"." -f1).sig
+         zcat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename%.gz}.sig)
       done
    else
       echo "NOT FOUND. Isn't the Package bismark-opkg-keys installed ?"

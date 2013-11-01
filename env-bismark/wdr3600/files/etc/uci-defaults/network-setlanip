@@ -1,6 +1,6 @@
 #!/bin/sh
 
 if [ "$(uci -q get network.lan.ipaddr)" != '192.168.142.1' ]; then
-	uci -q set network.lan.ipaddr=192.168.142.1
-	uci commit
+        uci -q set network.lan.ipaddr=192.168.142.1
+        uci commit
 fi

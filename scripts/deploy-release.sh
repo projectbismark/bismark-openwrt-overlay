@@ -36,3 +36,6 @@ $SCRIPT_DIR/touch-upgradable-tree.sh $DEST_DIR/ar71xx
 
 echo "Step 5: Write experiment configurations"
 $SCRIPT_DIR/experiments.py $DEST_DIR/ar71xx
+
+echo "Step 6: Sign Packages"
+$SCRIPT_DIR/signopkglist.sh $DEST_DIR/ar71xx

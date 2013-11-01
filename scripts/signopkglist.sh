@@ -1,35 +1,20 @@
 #!/bin/bash
 
-O="/O=Georgia Tech Network Operations and Internet Security Lab/OU=Project Bismark"           
-CN="/CN=downloads.projectbismark.net"                                                                                 
-EA="/emailAddress = ssl-admin@projectbismark.net"                                                                                  
+CERTNAME=bismark_signing_key.pem
+CERTPATH=$HOME/.$CERTNAME
+PUBKEY=serverCA.pem
+PUBKEYPATH=bismark-feeds/bismark/utils/bismark-opkg-keys/files/etc/ssl
 
-CERTNAME=opkgcert.pem                                                                                                     
-PUBKEY=opkgpub.key                                                                                                           
+echo "Checking for signer certificate in [$CERTPATH]"
 
-if [ "$#" -ne 3 ]; then                                                                                                            
-    echo "usage: signopkglist.sh <path-to-Packages-list-file> <name-for-private-key> <name-for-public-key>"                        
-    echo "example: sighopkglist.sh /path/to/Packages opkgcert.pem opkgpub.key"                      
-    exit 1                                                                                                                         
-fi                                                                                                                                 
+if [ -f $CERTPATH ];
+then
+   echo "FOUND. Checking bismark-opkg-keys for server's pubkey ..."
+   openssl verify $CERTPATH
 
-CERTNAME=$2                                                                                                                     
-PUBKEY=$3                                                                                                                          
-
-if [ ! -e $1 ]; then                                                                                                               
-    echo "Package file $1 does not exist"                                                                                  
-    exit 1                                                                                                                         
-fi                                                                                                                                 
-
-#generate both pub & priv keys in PEM format                                                                              
-openssl req -x509 -nodes -days 1800 \                                                                                     
-  -subj "/C=US/ST=Georgia/L=Atlanta/$O$CN$EA" \                                                                 
-  -newkey rsa:2048 -keyout $CERTNAME -out $CERTNAME                                                                                                                                                                                        
-
-openssl verify $CERTNAME                                                                                                                                                                                                                                        
-
-#sign files list                                                                                                                   
-openssl smime -sign -in $1 -signer $CERTNAME -binary -outform PEM -out $1.sig                       
-
-#extract public key from CERTNAME file                                                                                  
-openssl x509 -in $CERTNAME -pubkey -outform PEM -out $PUBKEY 
+   for filename in $(find $1 -name Packages.gz); do
+      zcat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename%.gz}.sig)
+   done
+else
+   echo "NOT FOUND. Not signing packages list. Please run generatecert.sh script to generate self-signed certificate."
+fi

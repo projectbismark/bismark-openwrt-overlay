@@ -1,40 +1,6 @@
 #!/bin/sh
 
-if [ ! -f /etc/config/network ]; then
-   touch /etc/config/network
-   uci set network.loopback=interface
-   uci set network.loopback.ifname=lo
-   uci set network.loopback.proto=static
-   uci set network.loopback.ipaddr=127.0.0.1
-   uci set network.loopback.netmask=255.0.0.0
-   uci set network.lan=interface
-   uci set network.lan.ifname=eth0.1
-   uci set network.lan.type=bridge
-   uci set network.lan.proto=static
-   uci set network.lan.ipaddr=192.168.142.1
-   uci set network.lan.netmask=255.255.255.0
-   uci set network.wan=interface
-   uci set network.wan.ifname=eth0.2
-   uci set network.wan.proto=dhcp
-   uci add network switch
-   uci set network.@switch[0]=switch
-   uci set network.@switch[0].name=eth0
-   uci set network.@switch[0].reset=1
-   uci set network.@switch[0].enable_vlan=1
-   uci add network switch_vlan
-   uci set network.@switch_vlan[0]=switch_vlan
-   uci set network.@switch_vlan[0].vlan=1
-   uci set network.@switch_vlan[0].ports="0t 2 3 4 5"
-   uci set network.@switch_vlan[0].device=eth0
-   uci add network switch_vlan
-   uci set network.@switch_vlan[1]=switch_vlan
-   uci set network.@switch_vlan[1].device=eth0
-   uci set network.@switch_vlan[1].vlan=2
-   uci set network.@switch_vlan[1].ports="0t 1"
-   uci commit
-else
-   if [ "$(uci -q get network.lan.ipaddr)" != '192.168.142.1' ]; then
-      uci -q set network.lan.ipaddr=192.168.142.1
-      uci commit
-   fi
+if [ "$(uci -q get network.lan.ipaddr)" != '192.168.142.1' ]; then
+        uci -q set network.lan.ipaddr=192.168.142.1
+        uci commit
 fi

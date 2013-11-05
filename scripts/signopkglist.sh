@@ -13,7 +13,7 @@ then
    openssl verify $CERTPATH
 
    for filename in $(find $1 -name Packages.gz); do
-      zcat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename%.gz}.sig)
+      cat $filename | openssl smime -sign -signer $CERTPATH -binary -outform PEM -out $(echo ${filename%.gz}.sig)
    done
 else
    echo "NOT FOUND. Not signing packages list. Please run generatecert.sh script to generate self-signed certificate."

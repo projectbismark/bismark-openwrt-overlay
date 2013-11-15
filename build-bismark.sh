@@ -13,8 +13,7 @@ BISMARK_RELEASE="lancre-rc7"
 DEPLOY_ROOT=/data/users/bismark/downloads
 #OPENWRT_TAG="attitude_adjustment_12.09"
 OPENWRT_SVN_REV="38248"
-FEEDS_BISMARK_PACKAGES_REV="HEAD"
-FEEDS_LUCI_BISMARK_REV="HEAD"
+FEEDS_BISMARK_PACKAGES_REV="lancre-rc7"
 FEEDS_LUCI_SVN_REV="9911"
 
 # DON'T CHANGE THINGS BELOW HERE UNLESS YOU KNOW WHAT YOU'RE DOING
@@ -82,9 +81,6 @@ mkdir -p bismark-feeds
 git_checkout bismark-feeds/bismark\
              git://github.com/projectbismark/bismark-packages.git \
              $FEEDS_BISMARK_PACKAGES_REV
-#git_checkout bismark-feeds/luci-bismark \
-#             git://github.com/shahifaqeer/luci-0.11.git \
-#             $FEEDS_LUCI_BISMARK_REV
 
 # Prepare buildroot
 ./scripts/feeds update
